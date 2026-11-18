@@ -1,0 +1,52 @@
+# --- Data: kept local, not in this public repo ---------------------------
+# Copy of D:/Ritun/Siwei_Micro_Transit data (SANDAG-derived trips, shapefiles,
+# QGIS overlays, generated network/demand outputs). See CLAUDE.md,
+# "Where the data came from".
+data_current_script/
+
+# Safety net: data/GIS file types anywhere else in the tree.
+# Un-ignore a specific small fixture with a "!path/to/file.csv" line if needed.
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.pkl
+*.pickle
+*.zip
+*.7z
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.qix
+*.sbn
+*.sbx
+*.qgz
+*.qgs
+*.gpkg
+*.geojson
+
+# --- Unrelated to this project -------------------------------------------
+Cupertino_Network_fullnetwork.ipynb
+
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+.env
+
+# --- Editors / OS -----------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# --- Claude Code: per-user local settings ---------------------------------
+.claude/settings.local.json
