@@ -565,51 +565,51 @@ def TRPartA_demand_files(study_area,debug_mode):
                 if study_area=="lemon_grove":
 
                     bt_c_0_m = 0  # beta_car_0 - alternative specific constant as a reference mode
-                    bt_c_ivt_m = 0.198  # beta_car_ivt
-                    bt_c_gas_m = 0.579 * (mean_income /income) # beta_car_GAS
+                    bt_c_ivt_m = 0.2  # beta_car_ivt
+                    bt_c_gas_m = 0.5 * (mean_income /income) # beta_car_GAS
 
                     bt_t_0_m = 0.242  # beta_car_0 - alternative specific constant as a reference mode
-                    bt_t_wk_m = 0.349  # beta_t_walking
-                    bt_m_wt_m = 0.094  # beta_microtransit_waiting
-                    bt_f_wt_m = 0.082  # beta_fixed_route_transit_waiting
+                    bt_t_wk_m = 0.3  # beta_t_walking
+                    bt_m_wt_m = 0.15  # beta_microtransit_waiting
+                    bt_f_wt_m = 0.15  # beta_fixed_route_transit_waiting
 
-                    bt_m_ivt_m = 0.104  # bt_m_ivt
-                    bt_f_ivt_m = 0.106  # bt_f_ivt
-                    bt_f_trfer_m = 0.504  # bt_f_trfer
+                    bt_m_ivt_m = 0.15  # bt_m_ivt
+                    bt_f_ivt_m = 0.15  # bt_f_ivt
+                    bt_f_trfer_m = 0.5  # bt_f_trfer
 
                     bt_t_fr_m = bt_c_gas_m  # bt_f_trfer
                 if study_area =="downtown_sd":
                     bt_c_0_m = 0 #beta_car_0 - alternative specific constant as a reference mode
-                    bt_c_ivt_m = 0.184  # beta_car_ivt
-                    bt_c_gas_m = 0.994 * (mean_income /income) # beta_car_ivt
+                    bt_c_ivt_m = 0.2  # beta_car_ivt
+                    bt_c_gas_m = 0.5 * (mean_income /income) # beta_car_GAS
 
-                    bt_t_0_m = 0.022  # beta_car_0 - alternative specific constant as a reference mode
-                    bt_t_wk_m = 0.293  # beta_t_walking
-                    bt_m_wt_m = 0.104  # beta_microtransit_waiting
-                    bt_f_wt_m = 0.069  # beta_fixed_route_transit_waiting
+                    bt_t_0_m = 0.242  # beta_car_0 - alternative specific constant as a reference mode
+                    bt_t_wk_m = 0.3  # beta_t_walking
+                    bt_m_wt_m = 0.15  # beta_microtransit_waiting
+                    bt_f_wt_m = 0.15  # beta_fixed_route_transit_waiting
 
-                    bt_m_ivt_m = 0.104  # bt_m_ivt
-                    bt_f_ivt_m = 0.102  # bt_f_ivt
-                    bt_f_trfer_m = 0.504  # bt_f_trfer
+                    bt_m_ivt_m = 0.15  # bt_m_ivt
+                    bt_f_ivt_m = 0.15  # bt_f_ivt
+                    bt_f_trfer_m = 0.5  # bt_f_trfer
 
                     bt_t_fr_m = bt_c_gas_m  # bt_f_trfer
 
 
                 ##########
 
-                bt_c_0 = max(np.random.normal(bt_c_0_m, 0),0)  # beta_car_0 - alternative specific constant as a reference mode
-                bt_c_ivt = max(np.random.normal(bt_c_ivt_m, 0.047), 0.01)  # beta_car_ivt
-                bt_c_gas = max(np.random.normal(bt_c_gas_m, 0.377), 0.05)  # beta_car_ivt
+                bt_c_0 = np.maximum(np.random.normal(bt_c_0_m, 0), 0)  # beta_car_0 - alternative specific constant as a reference mode
+                bt_c_ivt = np.maximum(np.random.normal(bt_c_ivt_m, 0.047), 0.01)  # beta_car_ivt
+                bt_c_gas = np.maximum(np.random.normal(bt_c_gas_m, 0.377), 0.05)  # beta_car_ivt
 
-                bt_t_0 = max(np.random.normal(bt_t_0_m, 0.04),0)  # beta_car_0 - alternative specific constant as a reference mode
-                bt_t_wk = max(np.random.normal(bt_t_wk_m, 0.140), 0.01)  # beta_t_walking
+                bt_t_0 = np.maximum(np.random.normal(bt_t_0_m, 0.04), 0)  # beta_car_0 - alternative specific constant as a reference mode
+                bt_t_wk = np.maximum(np.random.normal(bt_t_wk_m, 0.140), 0.01)  # beta_t_walking
                 # bt_t_wt = max(np.random.normal(bt_t_wt_m, 0.022), 0.01)  # beta_t_waiting
-                bt_m_wt = max(np.random.normal(bt_m_wt_m, 0.022), 0.01)  # beta_microtransit_waiting
-                bt_f_wt = max(np.random.normal(bt_f_wt_m, 0.022), 0.01)  # beta_fixed_route_transit_waiting
+                bt_m_wt = np.maximum(np.random.normal(bt_m_wt_m, 0.022), 0.01)  # beta_microtransit_waiting
+                bt_f_wt = np.maximum(np.random.normal(bt_f_wt_m, 0.022), 0.01)  # beta_fixed_route_transit_waiting
 
-                bt_m_ivt = max(np.random.normal(bt_m_ivt_m, 0.022), 0.01)  # bt_m_ivt
-                bt_f_ivt = max(np.random.normal(bt_f_ivt_m, 0.029), 0.01)  # bt_f_ivt
-                bt_f_trfer = max(np.random.normal(bt_f_trfer_m, 0.022), 0.01)  # bt_f_trfer
+                bt_m_ivt = np.maximum(np.random.normal(bt_m_ivt_m, 0.022), 0.01)  # bt_m_ivt
+                bt_f_ivt = np.maximum(np.random.normal(bt_f_ivt_m, 0.029), 0.01)  # bt_f_ivt
+                bt_f_trfer = np.maximum(np.random.normal(bt_f_trfer_m, 0.022), 0.01)  # bt_f_trfer
 
                 bt_t_fr = bt_c_gas  # bt_t_fr  transit fare should be the same as the gas
 
