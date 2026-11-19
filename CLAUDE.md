@@ -8,9 +8,13 @@ This folder builds the FleetPy **demand (trip-request) files** for microtransit 
 pre_process/generate_demand_files.py   main script (copy; data paths use DATA_ROOT)
 pre_process/process_network.py         network helpers imported as pre_process.process_network (copy, unchanged)
 rebuild_mgra_road_overlays.py          geopandas rebuild of the QGIS MGRA/road overlay CSVs (written in this session)
+build_mgra15_study_areas.py            MGRA15 study-area lists + shapefiles for LG and DT by area overlay (default share_in >= 0.5)
 Cupertino_Network_fullnetwork.ipynb    unrelated Cupertino notebook; still points to C:\Users\11643\... and D:\UCI Research\...
 data_current_script/                   copy of the data; its subfolders mirror D:/Ritun/Siwei_Micro_Transit
+data_new/                              new data added by the user (ABM3 demand, MGRA15 layer, DT/LG GIS); see "data_new/"
 ```
+
+Both data folders are gitignored. The GitHub repo (public) holds code only.
 
 - `generate_demand_files.py` defines `DATA_ROOT = <this folder>/data_current_script`, and every active data path is built from it. To find a file's original location, swap `DATA_ROOT` for `D:/Ritun/Siwei_Micro_Transit`.
 - `process_network.py` still has hardcoded `D:/Ritun/Siwei_Micro_Transit/...` paths in about 10 functions. The demand pipeline doesn't call them. Change them to `DATA_ROOT` only if those functions start being used.
@@ -81,7 +85,53 @@ $E="C:\Users\ritun_uci\.conda\envs\shftn_trvlrs"; $env:PATH="$E;$E\Library\mingw
   - **Rebuild run on 2026-11-17 (about 2 s).** It read 239 MGRAs (none removed by the list filter) and 1,408 roads, with no invalid geometries. contains: 805 rows, 73 MGRAs contain no road. intersects: 2,124 rows, 49 roads touch no MGRA. Both files have **the same 85 columns and identical row multisets on MGRA/ROADSEGID/FNODE/TNODE** as the QGIS files.
   - Formatting-only differences: POSTDATE/ADDSEGDT are written as `2013-06-15` (QGIS: `6/15/2013`). In contains, RIGHTWAY (15 rows) and SUBDIVID (59 rows) are `0` where QGIS leaves them blank; these are the unmatched-MGRA rows. The pipeline reads only MGRA/FNODE/TNODE.
   - **The row order is completely different, and that matters.** QGIS order isn't a simple sort. contains is grouped by MGRA in roughly reverse shapefile order. intersects isn't even grouped by road (1,408 roads fall into 2,122 non-contiguous runs). It looks like spatial-index iteration order. A replay of `map_mgra_to_nodes` pass 1/pass 2 on both versions maps the same 1,062 nodes, and pass 1 is identical (no node is contained in more than one MGRA). However, **51 nodes get a different MGRA**. All 51 are among the 84 pass-2 nodes where two MGRAs tie for most frequent, and `most_frequent` breaks ties by row order. The order of rows in `Nodes_MGRA_mapping.csv` also changes, which changes later `random.choice` picks. Both mappings are valid, but switching to the rebuilt files will not reproduce outputs made from the QGIS files.
-- Downtown SD has no from-scratch inputs: no raw edges, MGRA list or SANDAG trip file. Its overlays (`Data/0719_input/MGRA_nodes_mapping/MGRA_Contains_nodes.csv`, `MGRA_Nodes_match.csv`) also come from QGIS (`0718_Ritun_Downtown_SD/`).
+- In `data_current_script`, Downtown SD has no from-scratch inputs: no raw edges, MGRA list or SANDAG trip file. `data_new/Downtown_SD/` now adds an MGRA13 list and polygons, plus `DT_SD_roadnetworks.shp`, `Downtown_SD_Road_network.csv` and `Downtown_SD_microtransit_trips.csv`. Of those, only the MGRA files have been examined. Its overlays (`Data/0719_input/MGRA_nodes_mapping/MGRA_Contains_nodes.csv`, `MGRA_Nodes_match.csv`) also come from QGIS (`0718_Ritun_Downtown_SD/`).
+
+## data_new/ (examined 2026-11-18; no code uses it yet)
+
+### demand_data/: SANDAG ABM3 (ActivitySim), resident model, full region
+
+- These files are byte-identical copies of `E:/sanmith/abm_runs/output_full_model/resident/` (full ABM3 run of 2026-03-13; the same files are also in `abm_runs/shaqa_new_result/` and `test_abm_runs/submodel_skip_test_1/`). They hold **resident trips only**. The run's crossborder and visitor `final_trips.csv` were not copied.
+- `final_households.csv`: 0.5 GB, 1,276,883 rows, 55 cols, including `mgra` (= `home_zone_id`), `TAZ`, `income`, `microtransit`, `nev`, `household_id`.
+- `final_persons.csv`: 1.0 GB, 3,283,069 rows, 71 cols.
+- `final_tours.csv`: 1.0 GB, 4,512,367 rows, 33 cols, including `tour_mode`.
+- `final_trips.csv`: 12.1 GB, 12,834,519 rows, 140 cols. Key columns are `origin`/`destination` (MGRA15; IDs up to 24,333, so above 24,321 are probably external), `otaz`/`dtaz`, `depart`, `trip_period`, `trip_mode`, `purpose`, `weight_trip`, `weight_person_trip`, `trip_id`. Read it in chunks with `usecols`. A full pass takes about 5 min.
+- `sample_rate` = 1 everywhere, so this is a 100% sample.
+- **The zones are MGRA Series 15, not MGRA13.** `Lemon_grove_MGRA.csv` and the LG/DT QGIS overlays use MGRA13 IDs, and those IDs point to different places in MGRA15. Of 556 LG MGRA pairs that share a TAZ13, only 28 share a TAZ15. 147 of the 239 LG IDs have no households in the new data. Filtering with the old list picks 9,599 scattered, meaningless trips.
+- **`depart` is a half-hour period from 1 to 48, not an hour.** Period p starts at 3:00 + (p−1)×30 min. `trip_period`: EA 1–6 (3:00–6:00), AM 7–12, MD 13–25 (to 15:30), PM 26–32 (to 19:00), EV 33–48 (to 3:00). Periods 43–48 fall after midnight. `select_trips`'s `depart*3600` would be wrong for this data.
+- Income is only in households (join on `household_id`). **43,940 households (3.4%) have income 0**, and `TRPartA_demand_files` crashes on that. There is no `emp_15min`.
+- Modes use ActivitySim names (`DRIVEALONE`, `SHARED2/3`, `WALK_LOC/PRM/MIX`, `TNC_SINGLE`, …). Shared modes have `weight_trip` 0.5 or 0.3003. Every household has `microtransit` = 0. NEV zones are 10 and 14.
+
+### mgra15/: MGRA Series 15 polygons
+
+- Copied on 2026-11-18 from `E:/sanmith/sandag_abm_input/mgra15.*` (md5 verified). The copies in `E:/sanmith/abm_runs/*/input/` and `E:/sanmith/ABM/input/geography/mgra/` are identical. `TAZ15.shp` and the land-use table `mgra15_based_input2022.csv` (83 cols, including `emp_total`, `microtransit`, `nev`) are next to it in `E:/sanmith/sandag_abm_input/`. They were not copied.
+- 24,321 polygons, MGRA IDs 1 to 24,321 (unique). CRS is **EPSG:2230** (feet), while the LG layers are EPSG:3857. Columns: MGRA, CT20, CT20BG, SRA, MSA, City, ZIP, Sphere, CPA, CPASG, TAZ, Council, Super, LUZ, Elem, Unif, High, Coll, Transit, Mil.
+- It matches the ABM3 output: all 18,632 household MGRAs are present, every TAZ agrees, and the land-use TAZ agrees for all 24,321 MGRAs.
+- City codes follow the MGRA13 codes: 10 = Lemon Grove, 14 = San Diego, 9 = La Mesa, 19 = unincorporated.
+- `D:/Ritun/Siwei_Micro_Transit` has only MGRA13 layers. There's no MGRA15 layer and no MGRA13→MGRA15 crosswalk.
+
+### Study areas in MGRA15
+
+**Built on 2026-11-18 with `build_mgra15_study_areas.py`, cut-off share_in ≥ 0.5 (the user's choice).** The study area is the union of the area's MGRA13 polygons, and share_in = the share of an MGRA15 polygon's area that lies inside it. The script checks that the MGRA13 polygon IDs equal the MGRA13 list. It refuses to overwrite its outputs unless you pass `--overwrite`. It runs in about 4 s.
+
+| Area | List (`select_trips` reads column `MGRA`) | QGIS layer (EPSG:2230) | MGRA15 | min share_in | Households |
+|---|---|---|---|---|---|
+| Lemon Grove | `data_new/lemon_grove/Lemon_grove_MGRA15.csv` | `data_new/lemon_grove/Lemon_grove_MGRA15.shp` | 225 | 0.778 | 11,896 |
+| Downtown SD | `data_new/Downtown_SD/Downtown_SD_MGRA15.csv` | `data_new/Downtown_SD/Downtown_SD_MGRA15.shp` | 387 (388 − 8745) | 0.516 | 34,798 |
+
+- **Downtown excludes MGRA15 8745** (user decision, 2026-11-18). Rebuild command: `--areas downtown_sd --exclude 8745 --overwrite`. Running the script without `--exclude` brings 8745 back.
+  - 8745 is the east part of San Diego International Airport: TAZ 1457, the same TAZ as the ABM3 SAN airport MGRA 11249 (`E:/sanmith/ABM/src/asim/configs/airport.SAN/preprocessing.yaml`), which it borders. It is CPA 1483 / SRA 2; every other DT zone is SRA 1. It has 0 households, and 871 of its 889 jobs are in transportation/warehousing.
+  - It entered the list through MGRA13 2995 in the old `Downtown_SD_MGRA.csv`, which lies 99% inside 8745. **The MGRA13 list still contains 2995.**
+  - Air-passenger trips are in ABM3's separate airport model, not in `data_new/demand_data`.
+- The DT set is not only the Downtown community plan area. 335 zones are CPA 1404, which likely is Downtown; the other 52 come from 6 neighbouring CPAs.
+
+Columns in both: MGRA, TAZ, City, share_in. In LG, no zone has a share between 50% and 77.8%, so any cut-off in that range gives the same list. All 388 DT zones are City 14.
+
+Overlay counts for other cut-offs (from before the build):
+
+- **Lemon Grove**: the current 239 MGRA13 polygons cover 5.20 sq mi (City 10: 190, 14: 32, 19: 12, 9: 5), so `City == 10` is not the study area. MGRA15 zones with at least the given share of their area inside the study area: ≥99% 206, ≥90% 219, **≥50% 225** (5.17 sq mi), any overlap 267. 42 zones are partial.
+- **Downtown SD**: `data_new/Downtown_SD/Downtown_SD_MGRA.csv` (364 IDs) = the IDs in `DT_SD_mgra.shp` (EPSG:2230, MGRA column only). These are **MGRA13**: same-ID IoU with MGRA13 is above 0.9 for all of them, and 0 against MGRA15. The area is 3.14 sq mi. MGRA15 zones: ≥99% 366, ≥90% 381, **≥50% 388**, any overlap 435. 47 are partial. The ≥50% set holds 34,798 households.
+- `D:/Ritun/Siwei_Micro_Transit/MGRA13.shp` has only 10,802 polygons, so it isn't the full region.
 
 ## Working with this user
 
