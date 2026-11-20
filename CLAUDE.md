@@ -5,8 +5,8 @@ This folder builds the FleetPy **demand (trip-request) files** for microtransit 
 ## Layout
 
 ```
-pre_process/generate_demand_files.py   main script (copy; data paths use DATA_ROOT)
-pre_process/process_network.py         network helpers imported as pre_process.process_network (copy; one change: IS_DEMAND, see below)
+generate_demand_files.py               legacy demand script (copy; data paths use DATA_ROOT)
+process_network.py                     network helpers imported as process_network (copy; one change: IS_DEMAND, see below)
 rebuild_mgra_road_overlays.py          geopandas rebuild of the QGIS MGRA/road overlay CSVs (written in this session)
 build_mgra15_study_areas.py            MGRA15 study-area lists + shapefiles for LG and DT by area overlay (default share_in >= 0.5)
 build_bikenet_networks.py              MGRA15-era LG/DT road networks from Bike_Net_2022_Build (raw edges, roads.shp, nodes, zone access)
@@ -21,19 +21,21 @@ outputs_MGRA15/                        outputs of the MGRA15 network/demand buil
 
 The data folders and `outputs_MGRA15/` are gitignored. The GitHub repo (public) holds code only.
 
+The two copied scripts were in `pre_process/` (as in the original repo) until 2026-11-20, when they were moved to the root and the folder was deleted. The import is now `import process_network as p_n`, and `DATA_ROOT` goes one folder up from the script instead of two.
+
 - `generate_demand_files.py` defines `DATA_ROOT = <this folder>/data_current_script`, and every active data path is built from it. To find a file's original location, swap `DATA_ROOT` for `D:/Ritun/Siwei_Micro_Transit`.
 - `process_network.py` still has hardcoded `D:/Ritun/Siwei_Micro_Transit/...` paths in about 10 functions. The demand pipeline doesn't call them. Change them to `DATA_ROOT` only if those functions start being used.
 - Not copied (only legacy, commented-out code uses them): `Data/0719_input/demand_folder` and `Data/0719_input/trips_nodes_study_area_with_beta.csv`. The second doesn't exist in the original either.
 
 ## Running
 
-Use the conda env `shftn_trvlrs`. Run from this folder (the `pre_process.*` import needs that), and **put the env's DLL folders first on PATH**, as `conda activate` would. If you call python.exe alone, any numpy BLAS/LAPACK call (matmul bigger than a few elements, `np.dot`, `np.linalg`, `corrcoef`) kills the process silently with exit 127 / Windows error `0xc06d007f`. The cause is EMME 25 (`C:\Program Files\Bentley\OpenPaths\EMME 25.00.01\programs`, on the system PATH): it supplies its own `libiomp5md.dll`/`tbb12.dll`, which shadow the env's copies, and MKL loads them. `np.random`, pandas I/O and geopandas overlays worked even without the fix.
+Use the conda env `shftn_trvlrs`. Run from this folder (the scripts import `process_network` from it), and **put the env's DLL folders first on PATH**, as `conda activate` would. If you call python.exe alone, any numpy BLAS/LAPACK call (matmul bigger than a few elements, `np.dot`, `np.linalg`, `corrcoef`) kills the process silently with exit 127 / Windows error `0xc06d007f`. The cause is EMME 25 (`C:\Program Files\Bentley\OpenPaths\EMME 25.00.01\programs`, on the system PATH): it supplies its own `libiomp5md.dll`/`tbb12.dll`, which shadow the env's copies, and MKL loads them. `np.random`, pandas I/O and geopandas overlays worked even without the fix.
 
 Bash:
 ```
 E=C:/Users/ritun_uci/.conda/envs/shftn_trvlrs; W="$(cygpath -u "$E")"
 export PATH="$W:$W/Library/mingw-w64/bin:$W/Library/usr/bin:$W/Library/bin:$W/Scripts:$W/bin:$PATH"
-$E/python.exe -m pre_process.generate_demand_files
+$E/python.exe generate_demand_files.py
 $E/python.exe rebuild_mgra_road_overlays.py
 $E/python.exe build_bikenet_networks.py            # then:
 $E/python.exe build_fleetpy_network_mapping.py     # then:
@@ -43,7 +45,7 @@ $E/python.exe build_abm3_demand_files.py           # all four refuse to overwrit
 PowerShell:
 ```
 $E="C:\Users\ritun_uci\.conda\envs\shftn_trvlrs"; $env:PATH="$E;$E\Library\mingw-w64\bin;$E\Library\usr\bin;$E\Library\bin;$E\Scripts;$E\bin;$env:PATH"
-& "$E\python.exe" -m pre_process.generate_demand_files
+& "$E\python.exe" generate_demand_files.py
 ```
 
 - Env as of 2026-11-17: Python 3.14.7, numpy 2.5.2, **pandas 3.0.5**, pyproj 3.7.2 (PROJ 9.5.1), geopandas 1.1.4, pyogrio 0.13.0 (GDAL 3.12.4), shapely 2.1.2, colorama 0.4.6. colorama was the only package added (by pip). `pip check` is clean.

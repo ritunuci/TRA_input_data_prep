@@ -33,7 +33,7 @@ Node -> zone (for the mapping step):
 
 Outputs, in <out-root>/<area>/network/ (default out-root: outputs_MGRA15):
   <prefix>_raw_edges.csv   one row per link, in the layout that
-      pre_process.process_network.create_network_from_raw_edges() reads: FNODE, TNODE,
+      process_network.create_network_from_raw_edges() reads: FNODE, TNODE,
       FRXCOORD, FRYCOORD, TOXCOORD, TOYCOORD (EPSG:2230 ft), L_TRACT, R_TRACT (0),
       ROADSEGID, LENGTH (ft), SPEED (mph), RD20FULL; extra columns Func_Class, LINK_KIND
       (street / alley / driveway), IS_DEMAND.

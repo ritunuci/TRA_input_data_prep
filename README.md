@@ -69,7 +69,7 @@ pip install numpy pandas geopandas pyogrio shapely pyproj
 ```
 
 **Run every script from the repository root.** `build_fleetpy_network_mapping.py` imports
-`pre_process.process_network`, and that import only resolves from there.
+`process_network.py` from the same folder.
 
 ### Windows pitfall: numpy crashing with exit code 127 / `0xc06d007f`
 
@@ -198,7 +198,7 @@ MGRA15 zones.)
 
 ### Step 3: FleetPy network and zone → node mapping (`build_fleetpy_network_mapping.py`)
 
-This step uses the helpers in `pre_process/process_network.py`:
+This step uses the helpers in `process_network.py`:
 
 - **`create_network_from_raw_edges`** writes `pre_nodes.csv`/`pre_edges.csv`:
   - two directed edges per link;
@@ -494,10 +494,10 @@ build_bikenet_networks.py          step 2
 build_fleetpy_network_mapping.py   step 3
 build_period_travel_times.py       step 4
 build_abm3_demand_files.py         step 5
-pre_process/process_network.py     network helpers used by step 3 (create_network_from_raw_edges,
+process_network.py                 network helpers used by step 3 (create_network_from_raw_edges,
                                    write_node_edge_from_pre_node_edge); other functions there are legacy
                                    and contain hard-coded local paths
-pre_process/generate_demand_files.py   legacy MGRA13/ABM2-era demand pipeline (select_trips,
+generate_demand_files.py           legacy MGRA13/ABM2-era demand pipeline (select_trips,
                                    map_mgra_to_nodes, TRPartA_demand_files, synthesize_requests_with_trend_time,
                                    ...). Not used by the steps above; kept for reference and older studies
 rebuild_mgra_road_overlays.py      legacy: rebuilds the MGRA13 QGIS overlay CSVs used by generate_demand_files.py

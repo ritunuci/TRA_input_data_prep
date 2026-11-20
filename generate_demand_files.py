@@ -2,7 +2,7 @@ import os
 import csv
 import random
 import numpy as np
-import pre_process.process_network as p_n
+import process_network as p_n
 from collections import OrderedDict
 import pandas as pd
 from colorama import Fore, Style
@@ -10,7 +10,7 @@ from typing import Optional, Callable
 
 # All data is read from / written to the local copy in <repo>/data_current_script,
 # which mirrors the original D:/Ritun/Siwei_Micro_Transit folder layout.
-DATA_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data_current_script").replace("\\", "/")
+DATA_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_current_script").replace("\\", "/")
 
 network_folder = DATA_ROOT + "/Data/0719_input"
 request_file=os.path.join(network_folder,"trips_nodes_study_area_with_beta.csv")

@@ -8,13 +8,13 @@ network/ (inputs, from build_bikenet_networks.py)
   <prefix>_raw_edges.csv, <prefix>_raw_nodes.csv, <prefix>_mgra_access.csv
 
 network/ (written here)
-  pre_nodes.csv, pre_edges.csv   pre_process.process_network.create_network_from_raw_edges():
+  pre_nodes.csv, pre_edges.csv   process_network.create_network_from_raw_edges():
                                  every link -> two edges (one-way ignored), distance ft -> m,
                                  travel_time = distance / max(SPEED, 10 mph) (free flow), pickup nodes from
                                  the IS_DEMAND column, FleetPy IDs 0..N-1 in order of Bike_Net node ID.
                                  is_stop_only is then set to False for every node (user decision
                                  2026-11-19), replacing the function's random 0.35%.
-  nodes.csv, edges.csv           pre_process.process_network.write_node_edge_from_pre_node_edge():
+  nodes.csv, edges.csv           process_network.write_node_edge_from_pre_node_edge():
                                  the same network with FleetPy node IDs.
 
 mapping/ (written here; node IDs are FleetPy IDs)
@@ -46,7 +46,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-import pre_process.process_network as p_n
+import process_network as p_n
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_NEW = os.path.join(HERE, "data_new")
