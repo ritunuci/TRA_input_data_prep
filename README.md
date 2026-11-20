@@ -371,6 +371,40 @@ outputs_MGRA15/
 All coordinates are **EPSG:2230** (NAD83 / California zone 6, US ft). Node IDs in every FleetPy-facing file are
 FleetPy IDs (0..N−1); the `raw_*` columns hold Bike_Net node IDs.
 
+Also in the local `outputs_MGRA15/`, but not written by the scripts:
+
+- `lemon_grove/backup_option_i_ratio/` and `downtown_sd/backup_ratio_median/`: the period-time outputs of the
+  first build (unmatched links by class ratio, median). `build_period_travel_times.py --unmatched-rule ratio
+  --class-stat median` reproduces them.
+- `<area>/network/<prefix>_TNED_streets.gpkg`: QGIS comparison layers. They hold the TNED links touching the area,
+  without connectors, freeways and ramps, with `in_ours` (share of length within 30 ft of our network) and `covered`
+  (`in_ours` ≥ 0.8).
+
+### Units
+
+Travel times are in **seconds** and distances in **meters** in every file FleetPy or MTSM reads. Only the
+Bike_Net-style link files keep feet and mph.
+
+| File | Column | Unit |
+|---|---|---|
+| `network/edges.csv`, `fleetpy_network/base/edges.csv` | `distance` | meters (= `LENGTH` ft ÷ 3.28084) |
+| | `travel_time` (free flow) | seconds (= distance ÷ max(SPEED, 10 mph)) |
+| `fleetpy_network/<t>/edges_td_att.csv` | `edge_tt` (period time) | seconds |
+| `network/<prefix>_link_period_tt.csv` | `distance` | meters |
+| | `tt_free`, `tt_EA` … `tt_EV` | seconds |
+| `network/<prefix>_roads_period_tt.shp` | `tt_free`, `AB_*`, `BA_*` | seconds |
+| | `LENGTH` | feet |
+| `network/<prefix>_raw_edges.csv`, `<prefix>_roads.shp` | `LENGTH` | feet |
+| | `SPEED` | mph |
+| `nodes.csv`, `pre_nodes.csv`, `<prefix>_raw_nodes.csv` | coordinates | feet (EPSG:2230) |
+| `<prefix>_mgra_access.csv` | `ACCESS_DIST_FT` | feet |
+| demand files | `rq_time` | seconds after midnight (3:00 = 10,800; trips after midnight run past 86,400) |
+| | `parking_dur_min` (Downtown) | minutes |
+| | `income` | dollars per year, per worker |
+
+The ABM3 inputs use other units: `hwyload_*.csv` `AB_Time`/`BA_Time` are in minutes, TNED `LENGTH` is in miles
+and `SPD` in mph, and `final_trips.csv` `depart` is a half-hour period (1–48).
+
 ### Reference numbers (build of 2026-11-19; period times rebuilt 2026-11-20), to check a rebuild against
 
 | | Lemon Grove | Downtown SD |
