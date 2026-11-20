@@ -37,8 +37,8 @@ Outputs, in <out-root>/<area>/network/ (default out-root: outputs_MGRA15):
       FRXCOORD, FRYCOORD, TOXCOORD, TOYCOORD (EPSG:2230 ft), L_TRACT, R_TRACT (0),
       ROADSEGID, LENGTH (ft), SPEED (mph), RD20FULL; extra columns Func_Class, LINK_KIND
       (street / alley / driveway), IS_DEMAND.
-      NOTE: create_network_from_raw_edges() still marks demand nodes by SPEED == 20; it must
-      read IS_DEMAND before it is run on these files.
+      create_network_from_raw_edges() marks demand nodes from IS_DEMAND when the file has
+      that column (else by SPEED == 20, the old rule).
   <prefix>_roads.shp       the same links as a line layer (EPSG:2230), for QGIS
   <prefix>_raw_nodes.csv   NODE, X, Y, IS_DEMAND (on a pickup link), MGRA (zone it lies in,
       empty if outside the area's zones), ON_BOUNDARY (lies on more than one zone)
