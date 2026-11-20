@@ -260,8 +260,15 @@ so they hold no period information either. The only period information is in ABM
    - A link is **matched** when at least 80% of its points match.
    - Direction: Bike_Net A→B takes TNED AB when the two run the same way, and BA otherwise.
    - Link time = mean pace over the matched points × link length.
-4. **Unmatched links:** free-flow time × the median (period time ÷ free flow) of the matched links in the same
-   area and Func_Class (FC 0 is counted as 7).
+4. **Unmatched links (additive rule):** free-flow time + the class delay per foot × link length.
+   - Class delay = for the matched links of the same area and Func_Class (FC 0 counted as 7), both directions
+     pooled: sum of (period time − TNED's own free-flow time, LENGTH ÷ SPD) ÷ sum of link lengths. This is the
+     length-weighted mean delay per foot.
+   - So unmatched links keep Bike_Net's posted speed and get ABM3's intersection delay and congestion, in seconds.
+   - Why a length-weighted mean and not a median: TNED puts its delay at the downstream end of each link, so
+     per-link values are very skewed and the median understates the class's delay.
+   - The script also has the earlier rule (`--unmatched-rule ratio`: free flow × the class's period time ÷ free
+     flow ratio, which carries TNED's speeds) and `--class-stat median`. Defaults are set per area in `AREAS`.
 5. **Closed periods:** a period in which a matched link is closed gets that link's slowest other period time.
    (Near these two areas only two HOV links are ever closed, and no Bike_Net link matches them.)
 
@@ -269,7 +276,7 @@ so they hold no period information either. The only period information is in ABM
 
 - `network/<prefix>_link_period_tt.csv`: one row per directed edge, in `edges.csv` order. Columns: FleetPy and
   Bike_Net node IDs, `ROADSEGID`, name, `Func_Class`, distance, `tt_free, tt_EA, tt_AM, tt_MD, tt_PM, tt_EV` (s),
-  `source` (`tned` or `class_ratio`), `match_share`, `tned_ids`.
+  `source` (`tned` or `class_delay`; `class_ratio` with `--unmatched-rule ratio`), `match_share`, `tned_ids`.
 - `network/<prefix>_roads_period_tt.shp`: AB/BA period times per link, for QGIS.
 - `fleetpy_network/`: a ready FleetPy network folder:
 
@@ -364,7 +371,7 @@ outputs_MGRA15/
 All coordinates are **EPSG:2230** (NAD83 / California zone 6, US ft). Node IDs in every FleetPy-facing file are
 FleetPy IDs (0..N−1); the `raw_*` columns hold Bike_Net node IDs.
 
-### Reference numbers (build of 2026-11-19), to check a rebuild against
+### Reference numbers (build of 2026-11-19; period times rebuilt 2026-11-20), to check a rebuild against
 
 | | Lemon Grove | Downtown SD |
 |---|---|---|
@@ -373,7 +380,7 @@ FleetPy IDs (0..N−1); the `raw_*` columns hold Bike_Net node IDs.
 | pickup nodes | 1,032 | 709 |
 | zones with a pickup node inside / using the access node | 201 / 24 | 294 / 93 |
 | links matched to TNED (share of length) | 455 (34.7%) | 769 (73.2%) |
-| sum of edge times ÷ free flow, EA / AM / MD / PM / EV | 0.92 / 0.98 / 0.93 / 0.97 / 0.92 | 1.89 / 2.13 / 1.98 / 2.15 / 1.90 |
+| sum of edge times ÷ free flow, EA / AM / MD / PM / EV | 1.26 / 1.36 / 1.27 / 1.35 / 1.26 | 1.94 / 2.15 / 2.02 / 2.16 / 1.95 |
 | ABM3 trips with both ends in the area | 43,737 | 208,327 |
 | dropped: income 0 / no distinct node | 512 / 527 | 6,911 / 16,665 |
 | **requests written** / debug | **42,698** / 427 | **184,751** / 1,848 |
@@ -440,9 +447,14 @@ With the same inputs and seed, a rebuild reproduces these numbers and files exac
 
 **Period travel times**
 
-- **The period times carry ABM3's speeds**, not Bike_Net's: TNED often has 25–30 mph where Bike_Net has 20.
-  Because unmatched links use class ratios, Lemon Grove's local streets come out slightly *faster* than their
-  posted-speed free flow (ratio about 0.84). Downtown times are about 2 × free flow, including intersection delay.
+- **Matched and unmatched links run at different speed bases.** Matched links carry ABM3's speeds: TNED often
+  has 25–30 mph where Bike_Net has 20. Unmatched links keep Bike_Net's posted speed plus ABM3's delay. In Lemon
+  Grove, where 65% of the length is unmatched, unmatched local streets therefore run at about 13 mph in AM
+  against about 18 mph on matched ones. Arterials and collectors line up closely. Over the whole network, AM
+  times are about 1.36 × free flow in Lemon Grove and 2.15 × in Downtown, including intersection delay.
+- **An earlier rule made unmatched streets too fast.** Scaling free flow by the class ratio (the first build)
+  carried TNED's higher speeds onto unmatched local streets, so they came out *faster* than their posted speed
+  (Lemon Grove 0.84 × free flow), and shortest paths moved onto them. The additive rule avoids this.
 - **The two directions of a link can differ a lot.** TNED puts its delay at the downstream end of each link, and
   the script spreads it over the link's length.
 

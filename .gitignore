@@ -34,6 +34,10 @@ outputs_MGRA15/
 # --- Unrelated to this project -------------------------------------------
 Cupertino_Network_fullnetwork.ipynb
 
+# --- Personal notes (and Office lock files) -------------------------------
+notes.docx
+~$*
+
 # --- Python ---------------------------------------------------------------
 __pycache__/
 *.py[cod]

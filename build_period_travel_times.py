@@ -20,15 +20,28 @@ Matching (Claude's rules, tested 2026-11-19):
     BA_Time 0: then the AB time is used for both directions (one-way is ignored in our networks).
   - blocked TNED times (> 1000 min) are left out of the mean; if a period has no time left, the link's
     slowest other period is used.
-  - unmatched links: free flow x the median (period time / free flow) of the matched links of the same
-    area and Func_Class (Func_Class 0 counted as 7), both directions pooled. User's option (i): unmatched
-    streets get ABM3's speed level for their class, like matched streets.
+  - unmatched links, one of two rules per area (AREAS[...]["unmatched_rule"], or --unmatched-rule):
+      "delay" (additive; both areas, user's choice 2026-11-20): free flow + the class ABM3 delay per foot
+          (period time - TNED's own free flow LENGTH/SPD, per ft) of the matched links of the same area and
+          Func_Class, x link length. Unmatched streets keep Bike_Net's posted speed and get ABM3's delay +
+          congestion in seconds. source = class_delay.
+      "ratio" (user's option (i), used until 2026-11-20): free flow x the class ratio (period time /
+          Bike_Net free flow) of the matched links. Unmatched streets get ABM3's speed level for their
+          class, like matched streets. source = class_ratio.
+    The class value is either the median over the matched link-directions, or (class_stat "mean", used in
+    both areas) the aggregate: sum of delay / sum of length, i.e. the length-weighted mean delay per ft
+    (delay), or sum of period times / sum of free flow (ratio). Per-link values are skewed (TNED's delay
+    sits at the downstream end of each TNED link), so the median understates the class's delay. Set in
+    AREAS[...]["class_stat"] or --class-stat. Func_Class 0 counts as 7 and both directions of a matched
+    link are pooled; a class with no matched link takes the area-wide value.
+    The earlier outputs (ratio + median) are kept in outputs_MGRA15/<area>/backup_option_i_ratio/ (Lemon
+    Grove) and backup_ratio_median/ (Downtown); --unmatched-rule ratio --class-stat median reproduces them.
   - free flow = LENGTH / max(SPEED, 10 mph) with the pipeline's unit constants: the travel_time in edges.csv.
 
 Outputs, in <out-root>/<area>/:
   network/<prefix>_link_period_tt.csv  one row per directed edge of edges.csv: from_node, to_node (FleetPy),
       raw_from, raw_to (Bike_Net), ROADSEGID, RD20FULL, Func_Class, distance (m), tt_free, tt_EA, tt_AM,
-      tt_MD, tt_PM, tt_EV (s), source (tned / class_ratio), match_share, tned_ids
+      tt_MD, tt_PM, tt_EV (s), source (tned / class_ratio / class_delay), match_share, tned_ids
   network/<prefix>_roads_period_tt.shp  the links with the AB/BA period times and the source (QGIS)
   fleetpy_network/                     a FleetPy network folder:
       base/nodes.csv, base/edges.csv (copies; edges travel_time = free flow), base/crs.info (EPSG:2230)
@@ -42,6 +55,8 @@ Outputs, in <out-root>/<area>/:
 Usage (from the repo folder; see CLAUDE.md "Running" for the env + PATH setup):
     python build_period_travel_times.py
     python build_period_travel_times.py --areas downtown_sd --overwrite
+    python build_period_travel_times.py --unmatched-rule ratio --class-stat median --out-root <dir>
+        # = the earlier version (the backups above)
 """
 
 import argparse
@@ -64,9 +79,12 @@ DEFAULT_OUT_ROOT = os.path.join(HERE, "outputs_MGRA15")
 DEFAULT_HWYLOAD = "E:/sanmith/abm_runs/shaqa_new_result/report"
 
 AREAS = {
-    "lemon_grove": dict(prefix="Lemon_grove", mgra15_shp=os.path.join(DATA_NEW, "lemon_grove", "Lemon_grove_MGRA15.shp")),
-    "downtown_sd": dict(prefix="Downtown_SD", mgra15_shp=os.path.join(DATA_NEW, "Downtown_SD", "Downtown_SD_MGRA15.shp")),
+    "lemon_grove": dict(prefix="Lemon_grove", mgra15_shp=os.path.join(DATA_NEW, "lemon_grove", "Lemon_grove_MGRA15.shp"),
+                        unmatched_rule="delay", class_stat="mean"),
+    "downtown_sd": dict(prefix="Downtown_SD", mgra15_shp=os.path.join(DATA_NEW, "Downtown_SD", "Downtown_SD_MGRA15.shp"),
+                        unmatched_rule="delay", class_stat="mean"),
 }
+UNMATCHED_SOURCE = {"ratio": "class_ratio", "delay": "class_delay"}
 
 PERIODS = ["EA", "AM", "MD", "PM", "EV"]
 # FleetPy folders: simulation time (s) -> ABM3 period. EV runs 19:00-3:00, so it also covers 0:00-3:00.
@@ -126,6 +144,9 @@ def read_tned(area_shp, hwyload_dir):
         n_blocked += int(((ab > BLOCKED_MIN) | (ba > BLOCKED_MIN)).sum())
         t[f"pAB_{p}"] = np.where(ab > BLOCKED_MIN, np.nan, ab * 60.0 / t["len_ft"])  # pace, s per ft
         t[f"pBA_{p}"] = np.where(ba > BLOCKED_MIN, np.nan, ba * 60.0 / t["len_ft"])
+    # TNED's own free-flow pace (s per ft) = LENGTH / SPD, the same in both directions (= its ABTM* fields)
+    spd = t["SPD"].astype(float).to_numpy()
+    t["pAB_FF"] = t["pBA_FF"] = np.where(spd > 0, 3600.0 / (np.where(spd > 0, spd, 1.0) * 5280.0), np.nan)
     return t, n_blocked
 
 
@@ -138,7 +159,7 @@ def match_links(links, tned):
         sys.exit("ERROR: some Bike_Net link geometry is not a single line.")
     ids = tned["HWYCOV0_ID"].astype(int).to_numpy()
     names = tned["NM"].to_numpy()
-    pace = {f"{d}_{p}": tned[f"p{d}_{p}"].to_numpy() for d in ("AB", "BA") for p in PERIODS}
+    pace = {f"{d}_{p}": tned[f"p{d}_{p}"].to_numpy() for d in ("AB", "BA") for p in PERIODS + ["FF"]}
     out = []
     for geom, length_ft, name in zip(lg, links["LENGTH"].to_numpy(float), links["RD20FULL"].to_numpy()):
         L = shapely.length(geom)
@@ -170,7 +191,7 @@ def match_links(links, tned):
                 continue
             used.add(int(ids[b]))
             same = c > 0
-            for p in PERIODS:
+            for p in PERIODS + ["FF"]:
                 acc[f"AB_{p}"].append(pace[f"AB_{p}" if same else f"BA_{p}"][b])
                 acc[f"BA_{p}"].append(pace[f"BA_{p}" if same else f"AB_{p}"][b])
         n_par = len(acc["AB_EA"])
@@ -183,7 +204,7 @@ def match_links(links, tned):
     return pd.DataFrame(out, index=links.index)
 
 
-def build_area(name, cfg, out_root, hwyload_dir, overwrite):
+def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat):
     net_dir = os.path.join(out_root, name, "network")
     fp_dir = os.path.join(out_root, name, "fleetpy_network")
     pfx = os.path.join(net_dir, cfg["prefix"])
@@ -197,7 +218,7 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite):
         if os.path.exists(p) and not overwrite:
             sys.exit(f"ERROR: {p} exists. Use --overwrite.")
 
-    print(f"\n== {name}")
+    print(f"\n== {name} (unmatched links: rule '{rule}', class {stat})")
     tned, n_blk = read_tned(cfg["mgra15_shp"], hwyload_dir)
     print(f"  TNED street links (FC {TNED_STREET_FC[0]}-{TNED_STREET_FC[1]}) near the area: {len(tned)}; "
           f"blocked link-periods: {n_blk}")
@@ -228,28 +249,52 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite):
     if n_fill:
         print(f"  blocked period times filled with the link's slowest other period: {n_fill}")
 
-    # class ratios from the matched links (both directions pooled)
+    # per-class factor from the matched links (both directions pooled), as num / den per link-direction:
+    #   ratio: period time / Bike_Net free flow;  delay: (period time - TNED free flow) / link length, s per ft
+    # stat "median": median of num/den; "mean": sum(num) / sum(den), i.e. the class's overall ratio, or its
+    # length-weighted mean delay per ft (the median understates it: TNED's delay sits at the downstream end).
     mm = links[links.matched]
-    ratio = {}
+    if rule == "delay" and mm[["tned_AB_FF", "tned_BA_FF"]].isna().any().any():
+        sys.exit("ERROR: a matched link has no TNED free-flow time (TNED SPD <= 0).")
+
+    def num_den(d, p):
+        if rule == "ratio":
+            return mm[f"tned_{d}_{p}"], mm.tt_free
+        return mm[f"tned_{d}_{p}"] - mm[f"tned_{d}_FF"], mm.LENGTH
+
+    fc2 = pd.concat([mm.FC_GROUP, mm.FC_GROUP])
+    fac, overall = {}, {}
     for p in PERIODS:
-        r = pd.concat([mm[f"tned_AB_{p}"] / mm.tt_free, mm[f"tned_BA_{p}"] / mm.tt_free])
-        ratio[p] = r.groupby(pd.concat([mm.FC_GROUP, mm.FC_GROUP])).median()
-    ratio = pd.DataFrame(ratio)
-    overall = pd.Series({p: float(pd.concat([mm[f"tned_AB_{p}"] / mm.tt_free, mm[f"tned_BA_{p}"] / mm.tt_free]).median())
-                         for p in PERIODS})
-    missing_fc = sorted(set(links.FC_GROUP) - set(ratio.index))
+        (na, da), (nb, db) = num_den("AB", p), num_den("BA", p)
+        num, den = pd.concat([na, nb]), pd.concat([da, db])
+        if stat == "median":
+            fac[p] = (num / den).groupby(fc2).median()
+            overall[p] = float((num / den).median())
+        else:
+            fac[p] = num.groupby(fc2).sum() / den.groupby(fc2).sum()
+            overall[p] = float(num.sum() / den.sum())
+    fac = pd.DataFrame(fac)
+    missing_fc = sorted(set(links.FC_GROUP) - set(fac.index))
     for fc in missing_fc:
-        ratio.loc[fc] = overall
-    print("  class ratio (period time / free flow), matched links; used for unmatched links:")
-    print("    " + ratio.round(3).assign(matched_links=mm.groupby("FC_GROUP").size()).to_string().replace("\n", "\n    "))
+        fac.loc[fc] = pd.Series(overall)
+    label = "median" if stat == "median" else ("overall (sum / sum)" if rule == "ratio" else "length-weighted mean")
+    if rule == "ratio":
+        print(f"  class ratio (period time / free flow), {label}, matched links; used for unmatched links:")
+        show = fac.round(3)
+    else:
+        print(f"  class delay (period time - TNED free flow), {label}, s per 100 ft, matched links; added to the "
+              "free flow of unmatched links:")
+        show = (fac * 100).round(3)
+    print("    " + show.assign(matched_links=mm.groupby("FC_GROUP").size()).to_string().replace("\n", "\n    "))
     if missing_fc:
-        print(f"    (no matched links in Func_Class {missing_fc}: the area-wide median is used)")
+        print(f"    (no matched links in Func_Class {missing_fc}: the area-wide value is used)")
 
     for d in ("AB", "BA"):
         for p in PERIODS:
-            links[f"{d}_{p}"] = np.where(links.matched, links[f"tned_{d}_{p}"],
-                                         links.tt_free * links.FC_GROUP.map(ratio[p]).to_numpy())
-    links["source"] = np.where(links.matched, "tned", "class_ratio")
+            f = links.FC_GROUP.map(fac[p]).to_numpy()
+            unm = links.tt_free * f if rule == "ratio" else links.tt_free + f * links.LENGTH
+            links[f"{d}_{p}"] = np.where(links.matched, links[f"tned_{d}_{p}"], unm)
+    links["source"] = np.where(links.matched, "tned", UNMATCHED_SOURCE[rule])
     tab = links.groupby("Func_Class").agg(links=("matched", "size"), matched=("matched", "sum"))
     print("  matched links by Func_Class:", {int(k): f"{int(r.matched)}/{int(r.links)}" for k, r in tab.iterrows()},
           f"| total {int(links.matched.sum())}/{len(links)}, "
@@ -296,7 +341,7 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite):
 
     tot = out[tcols].sum()
     print("  sum of edge times / free flow:", {p: round(float(tot[f"tt_{p}"] / tot.tt_free), 3) for p in PERIODS})
-    for src in ("tned", "class_ratio"):
+    for src in ("tned", UNMATCHED_SOURCE[rule]):
         s = out[out.source == src][tcols].sum()
         print(f"    {src:11s} edges {int((out.source == src).sum()):5d}:",
               {p: round(float(s[f"tt_{p}"] / s.tt_free), 3) for p in PERIODS})
@@ -335,9 +380,14 @@ def main():
     ap.add_argument("--out-root", default=DEFAULT_OUT_ROOT)
     ap.add_argument("--hwyload-dir", default=DEFAULT_HWYLOAD)
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--unmatched-rule", choices=list(UNMATCHED_SOURCE),
+                    help="override the area's rule for unmatched links (default: AREAS[...]['unmatched_rule'])")
+    ap.add_argument("--class-stat", choices=["mean", "median"],
+                    help="override the area's class statistic (default: AREAS[...]['class_stat'])")
     args = ap.parse_args()
     for name in args.areas:
-        build_area(name, AREAS[name], args.out_root, args.hwyload_dir, args.overwrite)
+        build_area(name, AREAS[name], args.out_root, args.hwyload_dir, args.overwrite,
+                   args.unmatched_rule or AREAS[name]["unmatched_rule"], args.class_stat or AREAS[name]["class_stat"])
 
 
 if __name__ == "__main__":
