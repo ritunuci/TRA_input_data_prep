@@ -97,6 +97,10 @@ def create_network_from_raw_edges(network_file,pre_node_dir,pre_edges_dir):
             writer_edge.writerow(edge_fields)
             with open(network_file) as f:
                 csvreader = csv.DictReader(f)
+                # Pickup (demand) links: the IS_DEMAND column when the file has one (MGRA15 networks from
+                # build_bikenet_networks.py), otherwise the old rule SPEED == 20 (MGRA13 Roads_All files).
+                use_is_demand = "IS_DEMAND" in (csvreader.fieldnames or [])
+                print("demand links by:", "IS_DEMAND == 1" if use_is_demand else "SPEED == 20")
                 nodes = {}
                 links = []
                 node_list = []
@@ -114,7 +118,8 @@ def create_network_from_raw_edges(network_file,pre_node_dir,pre_edges_dir):
                     #             capacity = float(data[self.link_fields["capacity"]])
                     distance = float(data["LENGTH"]) / 3.28084  # length (meter)
 
-                    if float(data['SPEED']) == 20:
+                    is_demand_link = (int(data['IS_DEMAND']) == 1) if use_is_demand else (float(data['SPEED']) == 20)
+                    if is_demand_link:
                         n_demand_links += 1
                         if origin_node not in demand_nodes:
                             demand_nodes.append(origin_node)

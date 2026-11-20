@@ -4,6 +4,8 @@
 # "Where the data came from".
 data_current_script/
 data_new/
+# Outputs of the MGRA15 network/demand build (build_bikenet_networks.py etc.)
+outputs_MGRA15/
 
 # Safety net: data/GIS file types anywhere else in the tree.
 # Un-ignore a specific small fixture with a "!path/to/file.csv" line if needed.
