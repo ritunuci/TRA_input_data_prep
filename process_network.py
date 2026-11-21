@@ -101,6 +101,10 @@ def create_network_from_raw_edges(network_file,pre_node_dir,pre_edges_dir):
                 # build_bikenet_networks.py), otherwise the old rule SPEED == 20 (MGRA13 Roads_All files).
                 use_is_demand = "IS_DEMAND" in (csvreader.fieldnames or [])
                 print("demand links by:", "IS_DEMAND == 1" if use_is_demand else "SPEED == 20")
+                # One-way links (ONEWAY == 1, the TNED freeways/ramps added by build_bikenet_networks.py) get only the
+                # FNODE -> TNODE edge. Files without the column: every link both ways, as before.
+                use_oneway = "ONEWAY" in (csvreader.fieldnames or [])
+                n_oneway = 0
                 nodes = {}
                 links = []
                 node_list = []
@@ -137,7 +141,10 @@ def create_network_from_raw_edges(network_file,pre_node_dir,pre_edges_dir):
                     edge_row_AB = [int(origin_node), int(to_node), float(distance), float(travel_time), float(edge_id)]
                     edge_row_BA = [int(to_node), int(origin_node), float(distance), float(travel_time), float(edge_id)]
                     writer_edge.writerow(edge_row_AB)
-                    writer_edge.writerow(edge_row_BA)
+                    if use_oneway and int(data["ONEWAY"]) == 1:
+                        n_oneway += 1
+                    else:
+                        writer_edge.writerow(edge_row_BA)
 
                     if origin_node not in nodes:
                         if random.random() < 0.0035:
@@ -186,6 +193,8 @@ def create_network_from_raw_edges(network_file,pre_node_dir,pre_edges_dir):
 
     print("census tract:", len(census_track_list))
     print("number of demand links:", n_demand_links, "number of demand nodes:", len(demand_nodes))
+    if use_oneway:
+        print("one-way links (one edge only):", n_oneway)
     # return demand_nodes
 
 def write_node_edge_from_pre_node_edge(node_dir,edges_dir,pre_node_dir,pre_edges_dir):

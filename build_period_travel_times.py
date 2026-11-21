@@ -9,6 +9,12 @@ Source (decisions: user, 2026-11-19; see CLAUDE.md "Period travel times"):
     speeds (TNED SPD) plus intersection delay and congestion.
   - TNED link geometry: TNED_HwyNet in data_new/network/EMMEOutputs.gdb (EPSG:2230), street links only
     (FC 2-7; no freeways, ramps, connectors or walk links). TNED geometry runs AN -> BN.
+  - freeway / fwy_connector / ramp links (TNED links added by build_bikenet_networks.py, 2026-11-20) are not
+    matched: their AB_Time / BA_Time come straight from hwyload for their own TNED link (TNED_ID), source =
+    tned_freeway; a blocked period (> 1000 min) would get BLOCKED_TT_S. They are left out of the class values.
+  - street links split where a ramp joins mid-block are matched and timed as their whole Bike_Net link
+    (PARENT_SEGID); each piece gets the whole link's times x its share of the length, so street times are the
+    same as without freeways.
 
 Matching (Claude's rules, tested 2026-11-19):
   - each Bike_Net link (A -> B) is sampled every ~10 ft (at least 5 points). A point is matched to the
@@ -41,8 +47,10 @@ Matching (Claude's rules, tested 2026-11-19):
 Outputs, in <out-root>/<area>/:
   network/<prefix>_link_period_tt.csv  one row per directed edge of edges.csv: from_node, to_node (FleetPy),
       raw_from, raw_to (Bike_Net), ROADSEGID, RD20FULL, Func_Class, distance (m), tt_free, tt_EA, tt_AM,
-      tt_MD, tt_PM, tt_EV (s), source (tned / class_ratio / class_delay), match_share, tned_ids
-  network/<prefix>_roads_period_tt.shp  the links with the AB/BA period times and the source (QGIS)
+      tt_MD, tt_PM, tt_EV (s), source (tned / class_ratio / class_delay / tned_freeway), match_share (empty for
+      freeway edges), tned_ids
+  network/<prefix>_roads_period_tt.shp  the links with LINK_KIND, the AB/BA period times (BA empty on one-way
+      links) and the source (QGIS)
   fleetpy_network/                     a FleetPy network folder:
       base/nodes.csv, base/edges.csv (copies; edges travel_time = free flow), base/crs.info (EPSG:2230)
       <t>/edges_td_att.csv (from_node, to_node, edge_tt) for t = 0 (EV), 10800 (EA, 3:00), 21600 (AM, 6:00),
@@ -96,6 +104,8 @@ MIN_POINTS = 5
 PARALLEL_COS = 0.8
 MIN_SHARE = 0.8
 BLOCKED_MIN = 1000.0
+BLOCKED_TT_S = 1.0e6  # freeway link blocked in a period (> BLOCKED_MIN): this time, i.e. closed in practice
+FWY_KINDS = ("freeway", "fwy_connector", "ramp")  # TNED links added by build_bikenet_networks.py
 SPEED_FLOOR_MPH = 10.0
 CRS_INFO = "EPSG:2230"
 
@@ -229,8 +239,35 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat):
         sys.exit("ERROR: the roads layer and the raw-edges CSV have different links.")
     for c in ("FNODE", "TNODE", "LENGTH", "SPEED", "Func_Class"):
         links[c] = raw.loc[links["ROADSEGID"], c].to_numpy()
+    defaults = {"LINK_KIND": "street", "ONEWAY": 0, "PARENT_SEGID": None, "TNED_ID": 0}
+    for c, v in defaults.items():
+        links[c] = raw.loc[links["ROADSEGID"], c].to_numpy() if c in raw else v
+    links["PARENT_SEGID"] = links["PARENT_SEGID"].fillna(links["ROADSEGID"]).astype(int)
     # free flow exactly as create_network_from_raw_edges: (ft / 3.28084) m / (mph / 2.23694) m/s
     links["tt_free"] = (links["LENGTH"] / 3.28084) / (links["SPEED"].clip(lower=SPEED_FLOOR_MPH) / 2.23694)
+
+    # freeway links take their times straight from hwyload; street links split at a ramp are matched as their whole
+    # Bike_Net link (the parent) and the parent's times are shared out by length, so street times do not change
+    fwy = links[links["LINK_KIND"].isin(FWY_KINDS)].copy()
+    street = links[~links["LINK_KIND"].isin(FWY_KINDS)]
+    pieces = street[street["PARENT_SEGID"] != street["ROADSEGID"]].copy()
+    parents = []
+    for par, g in pieces.groupby("PARENT_SEGID"):
+        g = g.assign(k=g["ROADSEGID"] % 10).sort_values("k")
+        lines = [shapely.line_merge(shapely.force_2d(x)) for x in g.geometry]
+        coords = np.vstack([shapely.get_coordinates(x)[(1 if i else 0):] for i, x in enumerate(lines)])
+        if list(g["TNODE"].iloc[:-1]) != list(g["FNODE"].iloc[1:]):
+            sys.exit(f"ERROR: split pieces of link {par} do not join up.")
+        r = g.iloc[0].copy()
+        r["ROADSEGID"], r["TNODE"], r["LENGTH"] = int(par), g["TNODE"].iloc[-1], g["LENGTH"].sum()
+        r["geometry"] = shapely.linestrings(coords)
+        r["tt_free"] = (r["LENGTH"] / 3.28084) / (max(r["SPEED"], SPEED_FLOOR_MPH) / 2.23694)
+        parents.append(r)
+    links = pd.concat([street[street["PARENT_SEGID"] == street["ROADSEGID"]],
+                       gpd.GeoDataFrame(parents, crs=street.crs) if parents else None])
+    links = gpd.GeoDataFrame(links, geometry="geometry", crs=street.crs)
+    print(f"  links: {len(street)} street ({len(pieces)} split pieces of {len(parents)} links, matched as whole "
+          f"links), {len(fwy)} freeway/connector/ramp (times from hwyload)")
     m = match_links(links, tned)
     links = links.join(m)
     links["matched"] = links["match_share"] >= MIN_SHARE
@@ -307,6 +344,36 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat):
     print("    " + str(sorted({(str(a), "/".join(sorted({str(tnm[int(x)]) for x in r.split(",")})))
                                for a, r in zip(nr.RD20FULL, nr.name_rejected)})))
 
+    # ---- split pieces: the parent's values, times shared by length; freeway links: hwyload times
+    tcol = [f"{d}_{p}" for d in ("AB", "BA") for p in PERIODS]
+    keep_cols = ["source", "match_share", "tned_ids", "matched"]
+    if len(pieces):
+        pl = links.set_index("ROADSEGID").loc[pieces["PARENT_SEGID"]]
+        share = pieces["LENGTH"].to_numpy() / pl["LENGTH"].to_numpy()
+        for c in tcol:
+            pieces[c] = pl[c].to_numpy() * share
+        for c in keep_cols:
+            pieces[c] = pl[c].to_numpy()
+    if len(fwy):
+        n_blk_f = 0
+        for p in PERIODS:
+            h = pd.read_csv(os.path.join(hwyload_dir, f"hwyload_{p}.csv"), usecols=["ID1", "AB_Time", "BA_Time"]
+                            ).set_index("ID1").reindex(fwy["TNED_ID"])
+            ab, ba = h["AB_Time"].to_numpy(float), h["BA_Time"].to_numpy(float)
+            two = fwy["ONEWAY"].to_numpy() == 0
+            if np.isnan(ab).any() or (ab <= 0).any() or (two & (np.isnan(ba) | (ba <= 0))).any():
+                sys.exit(f"ERROR: a freeway link has no {p} time in hwyload.")
+            n_blk_f += int((ab > BLOCKED_MIN).sum() + (two & (ba > BLOCKED_MIN)).sum())
+            fwy[f"AB_{p}"] = np.where(ab > BLOCKED_MIN, BLOCKED_TT_S, ab * 60.0)
+            fwy[f"BA_{p}"] = np.where(~two, np.nan, np.where(ba > BLOCKED_MIN, BLOCKED_TT_S, ba * 60.0))
+        fwy["source"], fwy["match_share"], fwy["matched"] = "tned_freeway", np.nan, True
+        fwy["tned_ids"] = fwy["TNED_ID"].astype(int).astype(str)
+        print(f"  freeway links: blocked direction-periods {n_blk_f} (set to {BLOCKED_TT_S:.0e} s); "
+              "AM time / free flow by kind (sum / sum): "
+              + str({k: round(float(g.AB_AM.sum() / g.tt_free.sum()), 2) for k, g in fwy.groupby("LINK_KIND")}))
+    links = pd.concat([links[~links["ROADSEGID"].isin(pieces["PARENT_SEGID"])], pieces, fwy])
+    links = gpd.GeoDataFrame(links, geometry="geometry", crs=street.crs)
+
     # ---- per directed edge, in the order of edges.csv
     pre = pd.read_csv(pre_nodes_f)
     raw_of = dict(zip(pre["node_in_fleetpy"], pre["node_index"]))
@@ -341,7 +408,9 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat):
 
     tot = out[tcols].sum()
     print("  sum of edge times / free flow:", {p: round(float(tot[f"tt_{p}"] / tot.tt_free), 3) for p in PERIODS})
-    for src in ("tned", UNMATCHED_SOURCE[rule]):
+    for src in ("tned", UNMATCHED_SOURCE[rule], "tned_freeway"):
+        if not (out.source == src).any():
+            continue
         s = out[out.source == src][tcols].sum()
         print(f"    {src:11s} edges {int((out.source == src).sum()):5d}:",
               {p: round(float(s[f"tt_{p}"] / s.tt_free), 3) for p in PERIODS})
@@ -350,7 +419,7 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat):
 
     # ---- write
     out.to_csv(tt_out, index=False)
-    shp = links[["ROADSEGID", "RD20FULL", "Func_Class", "SPEED", "LENGTH", "tt_free"] + [f"{d}_{p}" for d in ("AB", "BA") for p in PERIODS]
+    shp = links[["ROADSEGID", "RD20FULL", "Func_Class", "LINK_KIND", "SPEED", "LENGTH", "tt_free"] + [f"{d}_{p}" for d in ("AB", "BA") for p in PERIODS]
                 + ["source", "match_share", "tned_ids", "geometry"]].copy()
     shp["match_share"] = shp["match_share"].round(3)
     shp = shp.rename(columns={"match_share": "share"})  # shapefile field names: max 10 characters

@@ -23,12 +23,13 @@ run the pipeline, put your own copies of the raw files in the folders listed bel
                       ▼
  [1] build_mgra15_study_areas.py     → data_new/<area>/<prefix>_MGRA15.csv / .shp   (study-area zones)
                       │
- EMMEOutputs.gdb (Bike_Net_2022_Build, Bike_Node_2022_Build)
+ EMMEOutputs.gdb (Bike_Net_2022_Build, Bike_Node_2022_Build; TNED_HwyNet, TNED_HwyNodes for freeways)
                       ▼
  [2] build_bikenet_networks.py       → outputs_MGRA15/<area>/network/<prefix>_raw_edges.csv, _raw_nodes.csv,
                       │                 _mgra_access.csv, _roads.shp
                       ▼
- [3] build_fleetpy_network_mapping.py → network/pre_nodes.csv, pre_edges.csv, nodes.csv, edges.csv
+ [3] build_fleetpy_network_mapping.py → network/pre_nodes.csv, pre_edges.csv, nodes.csv, edges.csv,
+                      │                  <prefix>_edge_kind.csv, _node_kind.csv
                       │                  mapping/Nodes_MGRA_mapping.csv, MGRA_Nodes_mapping.csv
  EMMEOutputs.gdb (TNED_HwyNet) + hwyload_{EA,AM,MD,PM,EV}.csv
                       ▼
@@ -107,8 +108,9 @@ create them and copy your files in.
 | `data_new/Downtown_SD/Downtown_SD_MGRA.csv` | old Downtown MGRA13 list (364 IDs) | 1 | `MGRA` |
 | `data_new/network/EMMEOutputs.gdb`, layer `Bike_Net_2022_Build` | SANDAG ABM3 network export (bike network built from Roads_All) | 2 | `A`, `B`, `ROADSEGID`, `RD20FULL` (street name), `Func_Class`, `SPEED` (mph), `AB_Lanes`, `BA_Lanes`, `Distance`, geometry (EPSG:2230) |
 | same gdb, layer `Bike_Node_2022_Build` | same | 2 | `NodeLev_ID`, `XCOORD`, `YCOORD`, `MGRA` (set only on MGRA centroid nodes) |
-| same gdb, layer `TNED_HwyNet` | ABM3 highway network | 4 | `HWYCOV0_ID`, `NM` (name), `FC`, `LENGTH` (**miles**), `WAY`, `SPD`, `AN`, `BN`, geometry (digitised AN→BN) |
-| `hwyload_EA.csv`, `hwyload_AM.csv`, `hwyload_MD.csv`, `hwyload_PM.csv`, `hwyload_EV.csv` | ABM3 run `report/` folder: assigned (loaded) link times per period | 4 (`--hwyload-dir`) | `ID1` (= `HWYCOV0_ID`), `AB_Time`, `BA_Time` (**minutes**) |
+| same gdb, layer `TNED_HwyNet` | ABM3 highway network | 2 (freeways), 4 | `HWYCOV0_ID`, `NM` (name), `FC`, `LENGTH` (**miles**), `WAY`, `SPD`, `AN`, `BN`, `BALN*` (BA lanes per period), `HOV`, `TOLL*`, geometry (digitised AN→BN) |
+| same gdb, layer `TNED_HwyNodes` | same | 2 | `HNODE`, `X_COORD`, `Y_COORD` |
+| `hwyload_EA.csv`, `hwyload_AM.csv`, `hwyload_MD.csv`, `hwyload_PM.csv`, `hwyload_EV.csv` | ABM3 run `report/` folder: assigned (loaded) link times per period (streets and freeways) | 4 (`--hwyload-dir`) | `ID1` (= `HWYCOV0_ID`), `AB_Time`, `BA_Time` (**minutes**) |
 | `data_new/demand_data/final_trips.csv` | ABM3 resident model output (12 GB, 12.8 M rows) | 5 | `trip_id`, `person_id`, `household_id`, `origin`, `destination` (MGRA15), `depart` (half-hour period 1–48), `trip_period`, `trip_mode`, `purpose` |
 | `data_new/demand_data/final_households.csv` | ABM3 output | 5 | `household_id`, `income`, `num_workers`, `auto_ownership` |
 | `data_new/demand_data/final_persons.csv` | ABM3 output | 5 | `person_id`, `transit_pass_ownership` (0/1) |
@@ -159,9 +161,10 @@ Result: Lemon Grove 225 zones (the smallest share_in is 0.778), Downtown 387 zon
 
 ### Step 2: road networks (`build_bikenet_networks.py`)
 
-**Source:** `Bike_Net_2022_Build`. Bike_Net is built from SANDAG's Roads_All street centrelines, the same source
-as the older MGRA13-era networks, but it matches MGRA15. (Do **not** combine MGRA13-era Roads_All extracts with
-MGRA15 zones.)
+**Source:** `Bike_Net_2022_Build` for the streets. Bike_Net is built from SANDAG's Roads_All street centrelines,
+the same source as the older MGRA13-era networks, but it matches MGRA15. (Do **not** combine MGRA13-era Roads_All
+extracts with MGRA15 zones.) Bike_Net has no freeways or ramps; those are added from TNED (see "Freeways and ramps"
+below).
 
 **Link rules:**
 
@@ -173,9 +176,26 @@ MGRA15 zones.)
 | Exceptions | FC 0/−1 links named `02ND AV`…`06TH AV`, `W GRAPE ST`, `W HAWTHORN ST` (`RESCUED_STREETS`; short miscoded pieces of real Downtown streets) are kept as normal streets. FC 0/−1 links named `ALLEY` are kept as alleys |
 | Pickup (demand) links | streets with Func_Class 4–7 (major arterials, collectors, locals), including `PRIVATE RD`. Func_Class 3 (prime arterial) is routing only |
 | Alleys / driveways | names containing `ALLEY` or ending in `DY`: **routing only**, never pickup links. A node where an alley meets a street is still a pickup node through the street |
-| One-way | **ignored**: every link is driven both ways, as in the earlier pipeline. Bike_Net's one-way coding is incomplete |
+| One-way | **ignored for streets**: every street link is driven both ways, as in the earlier pipeline. Bike_Net's one-way coding is incomplete. Freeways and ramps are one-way (below) |
 | Speed | Bike_Net `SPEED` (mph); step 3 applies a 10 mph floor |
 | Cleaning | self-loops dropped; of two links that join the same two nodes, the faster one is kept, because FleetPy cannot hold parallel edges |
+
+**Freeways and ramps** (from `TNED_HwyNet`; added after the streets, which they don't change; `--no-freeways`
+builds the streets-only network without the new columns):
+
+| Rule | Detail |
+|---|---|
+| Links | TNED FC 1 (freeway), 8 (freeway-to-freeway connector), 9 (ramp) touching the area's MGRA15 union. HOV, toll and reversible lanes are included (there are none near these areas) |
+| Direction | as in TNED: one edge (`ONEWAY = 1`) unless the link has BA lanes |
+| Joining the streets | only at **ramp ends**: TNED nodes of these links that also end a TNED street (FC 2–7). Never where lines cross (over/underpasses) |
+| Ramp end → our node | our nearest street node within **100 ft** whose street name agrees (same name rule as step 4) |
+| Mid-block ramp | if there is no such node but one of our links with an agreeing name passes within **30 ft**, that link is **split** at the ramp point (new street node, not a pickup node); otherwise the ramp end is not joined |
+| Extent | only freeway links in the **strongly connected** part that holds the streets: you can get on and off inside the area. Freeway beyond the area's last off-ramp or before its first on-ramp is dropped |
+| Cleaning | a freeway link whose ends join the same node is dropped; of two links between the same two nodes (e.g. two branches of one ramp) the faster is kept |
+| IDs | freeway node = 300,000,000 + TNED node; split node = 310,000,000 + TNED node of the ramp end; freeway link `ROADSEGID` = 900,000,000 + `HWYCOV0_ID`; split piece = 800,000,000 + 10 × parent `ROADSEGID` + piece number. All above the Bike_Net IDs, so the FleetPy IDs of street nodes don't change |
+| Speed | TNED `SPD`; `LENGTH` converted from miles to ft |
+
+Streets, pickup nodes, the zone mapping and the demand files come out exactly as without freeways.
 
 **Node → zone:**
 
@@ -191,9 +211,13 @@ MGRA15 zones.)
 
 - `<prefix>_raw_edges.csv`: one row per link, in the Roads_All-like layout that
   `create_network_from_raw_edges` reads (`FNODE, TNODE, FRXCOORD, FRYCOORD, TOXCOORD, TOYCOORD, L_TRACT, R_TRACT,
-  ROADSEGID, LENGTH (ft), SPEED (mph), RD20FULL`), plus `Func_Class, LINK_KIND, IS_DEMAND`;
-- `<prefix>_roads.shp`: the same links, for QGIS;
-- `<prefix>_raw_nodes.csv`: `NODE, X, Y, IS_DEMAND, MGRA, ON_BOUNDARY`;
+  ROADSEGID, LENGTH (ft), SPEED (mph), RD20FULL`), plus `Func_Class, LINK_KIND, IS_DEMAND` and, with freeways,
+  `ONEWAY, PARENT_SEGID, TNED_ID`. `LINK_KIND` is `street`, `alley`, `driveway`, `freeway`, `fwy_connector` or
+  `ramp`. Freeway rows have `Func_Class` = TNED FC (1/8/9) and `RD20FULL` = TNED `NM`. `PARENT_SEGID` is the
+  Bike_Net `ROADSEGID` of a split piece's whole link (= `ROADSEGID` for other streets, 0 for freeway links);
+- `<prefix>_roads.shp`: the same links, for QGIS (`PARENT_SEGID` is shortened to `PARENT_SEG`);
+- `<prefix>_raw_nodes.csv`: `NODE, X, Y, IS_DEMAND, MGRA, ON_BOUNDARY`, and with freeways `NODE_KIND`
+  (`street`, `freeway`, `split`);
 - `<prefix>_mgra_access.csv`: `MGRA, CONNECTOR_NODE, ACCESS_NODE, ACCESS_DIST_FT, N_PICKUP_NODES`.
 
 ### Step 3: FleetPy network and zone → node mapping (`build_fleetpy_network_mapping.py`)
@@ -201,14 +225,15 @@ MGRA15 zones.)
 This step uses the helpers in `process_network.py`:
 
 - **`create_network_from_raw_edges`** writes `pre_nodes.csv`/`pre_edges.csv`:
-  - two directed edges per link;
+  - two directed edges per link, one for a link with `ONEWAY = 1` (files without the column: always two);
   - distance converted from ft to m;
   - `travel_time` = distance ÷ max(SPEED, 10 mph), i.e. free flow;
   - pickup nodes = the end nodes of `IS_DEMAND == 1` links (the function falls back to the old `SPEED == 20` rule
     when the column is missing, and prints which rule it used);
   - FleetPy node IDs 0..N−1 in ascending order of Bike_Net node ID.
 - The function marks a random 0.35% of nodes as stop-only. **The script resets every node to
-  `is_stop_only = False`**, because FleetPy can't route through stop-only nodes.
+  `is_stop_only = False`**, because FleetPy can't route through stop-only nodes. It also removes the pickup flag
+  from split nodes (they lie on pickup streets but are not pickup nodes).
 - **`write_node_edge_from_pre_node_edge`** writes `nodes.csv`/`edges.csv` with FleetPy IDs.
 
 The mapping (`mapping/Nodes_MGRA_mapping.csv`) has the columns `node, MGRA, raw_node, source`, with FleetPy IDs,
@@ -220,11 +245,18 @@ sorted by MGRA and node:
 
 `mapping/MGRA_Nodes_mapping.csv` has `MGRA, nodes` (a list of node IDs).
 
+For MTSM, which must not walk on freeways or put stops on freeway nodes, the step also writes (FleetPy IDs):
+
+- `network/<prefix>_edge_kind.csv`: `from_node, to_node, ROADSEGID, link_kind` per edge of `edges.csv`;
+  `street`/`alley`/`driveway` are walkable, `freeway`/`fwy_connector`/`ramp` are car only;
+- `network/<prefix>_node_kind.csv`: `node, raw_node, kind` (`street` or `freeway`), `split` (1 for a split node,
+  which is a street node).
+
 **Checks** (the script stops on failure):
 
 - node IDs are 0..N−1;
-- edges = 2 × links, with no duplicates;
-- one connected network;
+- edges = 2 × two-way links + 1 × one-way links, with no duplicates;
+- one connected network, and **strongly connected** (every node can reach and be reached from every other);
 - no stop-only nodes;
 - the pipeline's pickup nodes equal the raw `IS_DEMAND` nodes;
 - every zone has at least one node;
@@ -248,8 +280,8 @@ so they hold no period information either. The only period information is in ABM
 
 **Method:**
 
-1. **TNED streets:** TNED links with FC 2–7 near the area. FC 1/8/9 are freeways and ramps and FC 10 are
-   connectors, none of which are in Bike_Net.
+1. **TNED streets:** TNED links with FC 2–7 near the area. FC 10 are connectors. Freeways and ramps (FC 1/8/9)
+   are not matched: they are TNED links themselves (point 6).
 2. **Pace per period and direction:** time × 60 ÷ (LENGTH × 5,280), in s/ft.
    - One-way links have `BA_Time` 0; the AB pace is used for both directions.
    - Times above 1,000 min mean a link is closed in that period; they are treated as missing.
@@ -271,13 +303,20 @@ so they hold no period information either. The only period information is in ABM
      flow ratio, which carries TNED's speeds) and `--class-stat median`. Defaults are set per area in `AREAS`.
 5. **Closed periods:** a period in which a matched link is closed gets that link's slowest other period time.
    (Near these two areas only two HOV links are ever closed, and no Bike_Net link matches them.)
+6. **Freeways, connectors and ramps:** `AB_Time`/`BA_Time` straight from hwyload for their own TNED link
+   (`source` = `tned_freeway`). A closed period would get 1,000,000 s (none occur). Ramp times include ABM3's
+   large fixed ramp delays (probably ramp meters; up to about 2 min on one link).
+7. **Split street links:** matched and timed as the whole Bike_Net link; each piece gets the whole link's times
+   × its share of the length. So street times are exactly as without freeways.
 
 **Outputs:**
 
 - `network/<prefix>_link_period_tt.csv`: one row per directed edge, in `edges.csv` order. Columns: FleetPy and
   Bike_Net node IDs, `ROADSEGID`, name, `Func_Class`, distance, `tt_free, tt_EA, tt_AM, tt_MD, tt_PM, tt_EV` (s),
-  `source` (`tned` or `class_delay`; `class_ratio` with `--unmatched-rule ratio`), `match_share`, `tned_ids`.
-- `network/<prefix>_roads_period_tt.shp`: AB/BA period times per link, for QGIS.
+  `source` (`tned`, `class_delay` or `tned_freeway`; `class_ratio` with `--unmatched-rule ratio`),
+  `match_share` (empty for freeway edges), `tned_ids`.
+- `network/<prefix>_roads_period_tt.shp`: AB/BA period times per link, with `LINK_KIND`, for QGIS (`BA_*` empty
+  on one-way links).
 - `fleetpy_network/`: a ready FleetPy network folder:
 
 ```
@@ -360,7 +399,8 @@ outputs_MGRA15/
   lemon_grove/   (prefix Lemon_grove)
   downtown_sd/   (prefix Downtown_SD)
     network/      <prefix>_raw_edges.csv, _raw_nodes.csv, _mgra_access.csv, _roads.shp      (step 2)
-                  pre_nodes.csv, pre_edges.csv, nodes.csv, edges.csv                        (step 3)
+                  pre_nodes.csv, pre_edges.csv, nodes.csv, edges.csv,
+                  <prefix>_edge_kind.csv, _node_kind.csv                                    (step 3)
                   <prefix>_link_period_tt.csv, _roads_period_tt.shp                         (step 4)
     mapping/      Nodes_MGRA_mapping.csv, MGRA_Nodes_mapping.csv                            (step 3)
     fleetpy_network/  base/, 0/, 10800/, 21600/, 32400/, 55800/, 68400/, network_dynamics.csv (step 4)
@@ -375,7 +415,10 @@ Also in the local `outputs_MGRA15/`, but not written by the scripts:
 
 - `lemon_grove/backup_option_i_ratio/` and `downtown_sd/backup_ratio_median/`: the period-time outputs of the
   first build (unmatched links by class ratio, median). `build_period_travel_times.py --unmatched-rule ratio
-  --class-stat median` reproduces them.
+  --class-stat median` reproduces them (on a `--no-freeways` network).
+- `<area>/backup_streets_only/`: `network/`, `mapping/`, `demand/` and `fleetpy_network/` as they were before
+  freeways were added (2026-11-20). `build_bikenet_networks.py --no-freeways` and steps 3–5 reproduce the CSVs
+  byte for byte (the `.dbf` header date differs; the period shapefile now also has `LINK_KIND`).
 - `<area>/network/<prefix>_TNED_streets.gpkg`: QGIS comparison layers. They hold the TNED links touching the area,
   without connectors, freeways and ramps, with `in_ours` (share of length within 30 ft of our network) and `covered`
   (`in_ours` ≥ 0.8).
@@ -394,7 +437,7 @@ Bike_Net-style link files keep feet and mph.
 | | `tt_free`, `tt_EA` … `tt_EV` | seconds |
 | `network/<prefix>_roads_period_tt.shp` | `tt_free`, `AB_*`, `BA_*` | seconds |
 | | `LENGTH` | feet |
-| `network/<prefix>_raw_edges.csv`, `<prefix>_roads.shp` | `LENGTH` | feet |
+| `network/<prefix>_raw_edges.csv`, `<prefix>_roads.shp` | `LENGTH` | feet (freeway rows: TNED miles × 5,280) |
 | | `SPEED` | mph |
 | `nodes.csv`, `pre_nodes.csv`, `<prefix>_raw_nodes.csv` | coordinates | feet (EPSG:2230) |
 | `<prefix>_mgra_access.csv` | `ACCESS_DIST_FT` | feet |
@@ -405,16 +448,21 @@ Bike_Net-style link files keep feet and mph.
 The ABM3 inputs use other units: `hwyload_*.csv` `AB_Time`/`BA_Time` are in minutes, TNED `LENGTH` is in miles
 and `SPD` in mph, and `final_trips.csv` `depart` is a half-hour period (1–48).
 
-### Reference numbers (build of 2026-11-19; period times rebuilt 2026-11-20), to check a rebuild against
+### Reference numbers (build of 2026-11-19; period times and freeways 2026-11-20), to check a rebuild against
 
 | | Lemon Grove | Downtown SD |
 |---|---|---|
 | MGRA15 zones | 225 | 387 |
-| links / nodes / directed edges | 1,285 / 1,045 / 2,570 | 1,071 / 724 / 2,142 |
+| street links / nodes (`--no-freeways`: directed edges) | 1,285 / 1,045 (2,570) | 1,071 / 724 (2,142) |
+| freeway links kept (miles): freeway / connector / ramp | 27 (5.74): 11 / 1 / 15 | 100 (14.90): 31 / 8 / 61 |
+| ramp ends joined at a node / by a split / not joined | 5 / 2 / 1 (of 13; the rest lead to dropped freeway) | 24 / 6 / 1 (of 39) |
+| with freeways: links / nodes / directed edges | 1,314 / 1,067 / 2,601 | 1,177 / 800 / 2,255 |
 | pickup nodes | 1,032 | 709 |
 | zones with a pickup node inside / using the access node | 201 / 24 | 294 / 93 |
 | links matched to TNED (share of length) | 455 (34.7%) | 769 (73.2%) |
-| sum of edge times ÷ free flow, EA / AM / MD / PM / EV | 1.26 / 1.36 / 1.27 / 1.35 / 1.26 | 1.94 / 2.15 / 2.02 / 2.16 / 1.95 |
+| sum of edge times ÷ free flow, EA / AM / MD / PM / EV (streets only) | 1.26 / 1.36 / 1.27 / 1.35 / 1.26 | 1.94 / 2.15 / 2.02 / 2.16 / 1.95 |
+| the same with freeways | 1.26 / 1.37 / 1.28 / 1.37 / 1.26 | 1.90 / 2.13 / 1.98 / 2.14 / 1.91 |
+| freeway edges alone, AM | 2.46 | 1.62 |
 | ABM3 trips with both ends in the area | 43,737 | 208,327 |
 | dropped: income 0 / no distinct node | 512 / 527 | 6,911 / 16,665 |
 | **requests written** / debug | **42,698** / 427 | **184,751** / 1,848 |
@@ -439,6 +487,11 @@ With the same inputs and seed, a rebuild reproduces these numbers and files exac
   first period folder crashes.
 - **MTSM's runner:** `fleetpy_runner.stage_inputs` copies only the `base/` files (`LG_STAGED_INPUTS`). Add the
   period folders and `network_dynamics.csv` to that list.
+- **Freeways in MTSM's super-network:** `pre_process/build_super_network.py` (MTSM b38d7ba) puts a walk link on
+  every road edge, draws virtual stops from all road nodes, joins FRT stops to the nearest road node, and assumes
+  two edges per road segment. With freeways in the network, use `<prefix>_edge_kind.csv` and `_node_kind.csv` to
+  keep walking, virtual stops and stop joining on streets. Car (`auto_edges.csv`) and microtransit driving can use
+  every edge.
 - **Demand file in MTSM:**
   - MTSM reads the demand file with `read_request`, which picks columns by name and ignores the extra ones.
   - It then writes FleetPy's own request file with only `rq_time, start, end, request_id`.
@@ -475,7 +528,13 @@ With the same inputs and seed, a rebuild reproduces these numbers and files exac
 
 **Network**
 
-- **One-way streets are not modelled.** Every link is driven both ways.
+- **One-way streets are not modelled.** Every street link is driven both ways; only freeways and ramps are
+  one-way.
+- **Only part of the freeways is in the network.** Freeway is kept only between an on-ramp and an off-ramp inside
+  the area (Lemon Grove 5.7 of 17.9 mi touching the area: SR-94 between its Lemon Grove interchanges and a short
+  piece of SR-125 SB; Downtown 14.9 of 25.7 mi, mostly I-5). Trips can't use interchanges just outside the area,
+  because those streets aren't in the network either. In the demand files, freeways shorten the mean AM trip by
+  0.1% (Lemon Grove) and 1.7% (Downtown); 0.3% / 3.2% of trips use them in AM.
 - **Disconnected pieces are dropped.** A few street pieces inside the area connect to the network only through
   streets outside it, and the largest-component rule removes them: Lemon Grove 29 nodes, Downtown 16.
 
@@ -529,8 +588,8 @@ build_fleetpy_network_mapping.py   step 3
 build_period_travel_times.py       step 4
 build_abm3_demand_files.py         step 5
 process_network.py                 network helpers used by step 3 (create_network_from_raw_edges,
-                                   write_node_edge_from_pre_node_edge); other functions there are legacy
-                                   and contain hard-coded local paths
+                                   write_node_edge_from_pre_node_edge; IS_DEMAND and ONEWAY columns are
+                                   optional); other functions there are legacy and contain hard-coded local paths
 generate_demand_files.py           legacy MGRA13/ABM2-era demand pipeline (select_trips,
                                    map_mgra_to_nodes, TRPartA_demand_files, synthesize_requests_with_trend_time,
                                    ...). Not used by the steps above; kept for reference and older studies

@@ -162,7 +162,7 @@ On 2026-11-19 everything done after commit d9b9675 was rolled back: a TNED-based
   - The exclusion is per link. A node where an alley or driveway meets a street stays a pickup node through the street link, as the old SPEED == 20 rule did.
   - **They stay in the network for routing**, driven both ways, as in the old work. The old LG raw edges had 17 alley links and 12 "PRIVATE DY" links, all driven both ways and none of them demand links. In Bike_Net, 6 LG and 5 DT alleys join two streets; the rest are mostly dead ends.
 - **Bike-only links are removed** from the network.
-- **One-way is ignored: every link is driven both ways**, as in the old pipeline. `create_network_from_raw_edges` writes AB and BA for every link; the old LG file had 124 `ONEWAY = F` links, all driven both ways.
+- **One-way is ignored: every link is driven both ways**, as in the old pipeline. `create_network_from_raw_edges` writes AB and BA for every link; the old LG file had 124 `ONEWAY = F` links, all driven both ways. (Since 2026-11-20 this holds for streets only; the TNED freeways and ramps are one-way, see "Freeways and ramps from TNED".)
 - **Routing links:**
   - Func_Class 3–7 with `AB_Lanes + BA_Lanes > 0`, touching the area's MGRA15 union (the `<prefix>_MGRA15.shp` polygons), keeping the largest connected component.
   - Drop Func_Class 10 (connectors), 0 and −1 (paths, walkways, "platfrom connection") and "PERSHING BIKEWAY".
@@ -282,6 +282,60 @@ Commands: `build_bikenet_networks.py`, then `build_fleetpy_network_mapping.py` (
   - With MTSM's `start_time 0` and `time_step 60`, `0/` loads at the first step.
   - `PoolingIRSOnly` logs "inform_network_travel_time_update not implemented" at each load. It is harmless: the operator shares the routing engine.
 - **FleetPy timing:** the routing engine is created without `scenario_time` (`FleetSimulationBase.py:230`), so it starts on `base/edges.csv` (free flow). A period folder loads only when `update_network(sim_time)` is called with exactly its time. A run from 0 with a time step dividing the folder times picks up every folder. A run that starts at e.g. 5:00 uses free flow until 6:00 (AM).
+
+### Freeways and ramps from TNED (decided and built 2026-11-20; see "Freeway build" at the end of this section)
+
+Bike_Net has no freeways or ramps. The user wants them in the network, taken from `TNED_HwyNet` (FC 1 freeway, 8 freeway-to-freeway connector, 9 ramp).
+
+- **Decided (user, 2026-11-20):**
+  - Add TNED FC 1/8/9 links that touch the area's MGRA15 union, **driven in their real direction only** (TNED one-way links get one edge). Streets stay driven both ways.
+  - **Include HOV, toll and reversible lanes.** Step 0 found none: every link has HOV 1, no tolls, no period-dependent lanes, no blocked times. If a blocked time ever turns up, use a very large time in that period, not the slowest-finite rule.
+  - Ramps join streets only at ramp ends (TNED nodes that also end a TNED FC 2–7 street), never where geometries cross.
+  - **Ramp end → our network:** snap to the nearest node of ours **within 100 ft whose street name agrees** (`names_agree`). If none, and a same-name link of ours lies within 30 ft (mid-block ramp), **split that link at the ramp point** (user, 2026-11-20).
+  - **The street network stays exactly as built** (same links, nodes, pickups, mapping). **No reconnect step** (user, 2026-11-20): letting freeways reconnect the dropped street pieces joins none of them in either area (College Grove Wy has an on-ramp only).
+  - Keep only freeway links in the largest **strongly** connected part (you can get on and off inside the area).
+  - Freeway and split nodes are not pickup nodes and get IDs above Bike_Net's maximum (200,004,947; TNED HNODE max 33,493), so existing FleetPy IDs, the mapping and the demand files should stay unchanged (to be checked byte for byte).
+  - Freeway edges take free flow (LENGTH/SPD) and period times straight from TNED/hwyload; they are left out of street matching and the class-delay statistics. Split street pieces take the parent link's times, shared by length.
+- **Plan (code):** `build_bikenet_networks.py` (add freeways, snap/split, direction column, SCC); `process_network.create_network_from_raw_edges` (one edge for one-way links when the direction column exists; old files unchanged); `build_fleetpy_network_mapping.py` (edge-count and strong-connectivity checks); `build_period_travel_times.py` (freeway edges from hwyload; split pieces). Back up current outputs first; update README.
+- **Step 0 check (2026-11-20, read-only; scratchpad `fwy_step0.py`, `fwy_step0_<prefix>.gpkg`):**
+
+  | | LG | DT |
+  |---|---|---|
+  | FC 1/8/9 links touching the area | 68 (17.9 mi): 29 / 7 / 32 | 150 (25.7 mi): 51 / 21 / 78 |
+  | freeways | SR-94, SR-125 | I-5, SR-94, SR-163 |
+  | one-way | 68 | 149 (1 two-way) |
+  | ramp ends meeting a TNED street | 13 | 39 |
+  | snapped to a node (≤ 100 ft, name agrees) | 9 (median 2 ft) | 33 (median 10 ft; one at 105 ft slipped past the bbox query; the build must test distance strictly) |
+  | mid-block, link split | 3: Massachusetts Av, Federal Bl, Jamacha Rd (0–12 ft from the link, 150–360 ft from a node) | 5: State, Cedar, Pershing, B St, G St (0–19 ft; 120–180 ft) |
+  | left out | College Grove Wy (dropped piece, on-ramp only) | Ash St / 11th Av (ambiguous; check in QGIS) |
+  | **kept, snap + split** | **27 links, 5.7 mi** (snap only 17, 2.5 mi) | **101 links, 15.0 mi** (snap only 93, 13.2 mi) |
+  | new freeway nodes / split links (2 of 3 LG splits used) | 20 / 2 | 70 / 5 |
+  | dropped: after the area's last off-ramp / before its first on-ramp | 23 links 6.7 mi / 15 links 4.9 mi | 21 links 4.1 mi / 27 links 6.5 mi |
+
+  - LG keeps SR-94 between its LG interchanges and a short piece of SR-125 SB; most of SR-125 and the SR-94/SR-125 connectors lead to ramps outside the area. DT keeps most of I-5; most of SR-163 and SR-94 drop out.
+  - All street nodes stay in the strongly connected part (LG 1,045, DT 724).
+  - hwyload AM time ÷ TNED free flow: freeway mainline median 1.17–1.18, p90 1.37 (LG) / 1.85 (DT). Ramps carry large fixed delays, probably ramp meters: LG ramp links median +25 s, max +158 s; DT max +121 s (one 80 ft DT ramp takes 2 min in AM).
+  - DT oddities: a ramp named "5TH HOV" coded HOV 1; 13 links with `MINMODE 600` (meaning unknown; HOV and toll fields show no restriction). 65 LG / 95 DT TNED rows (FC 99, two FC 10) have no ID/AN/BN; skip them.
+- **MTSM consequence (checked in `ritunuci/Multimodal_Transportation_System_Model` b38d7ba, `pre_process/build_super_network.py`):** it puts a walk link on every road edge, draws virtual stops from all road nodes and joins FRT stops to the nearest road node, and assumes every road segment has two edges. With freeways in, MTSM must use only street edges/nodes for walking, virtual stops and stop joining; the car network (`auto_edges.csv`) and microtransit driving can use all edges. Plan: write a file that marks freeway edges and nodes for MTSM (format to agree with the user).
+- **Freeway build (2026-11-20)**, all four scripts rerun with `--overwrite`:
+  - **Backup first:** `outputs_MGRA15/<area>/backup_streets_only/{network,mapping,demand,fleetpy_network}` (md5 verified). `build_bikenet_networks.py --no-freeways` + steps 3–5 reproduce every CSV byte for byte (checked in the scratchpad); `.dbf` files differ only in the header date, and `_roads_period_tt.shp` now also has `LINK_KIND`.
+  - **Code:** `build_bikenet_networks.py` `add_freeways()` + `scc_labels()` (imports `names_agree` from `build_period_travel_times.py`), `--no-freeways`; `process_network.create_network_from_raw_edges` writes one edge for `ONEWAY == 1` when the column exists; `build_fleetpy_network_mapping.py` `fix_pre_nodes()` (stop-only reset + pickup flag off for split nodes), new checks (edge count with one-way links, strong connectivity), writes `<prefix>_edge_kind.csv` (`from_node, to_node, ROADSEGID, link_kind`) and `<prefix>_node_kind.csv` (`node, raw_node, kind` street/freeway, `split`) for MTSM (Claude's format; the user approved the build); `build_period_travel_times.py`: freeway edges from hwyload (`source` = `tned_freeway`, `match_share` empty, `BLOCKED_TT_S` = 1e6 s), split pieces timed as their whole parent and shared by length.
+  - **New columns:** raw edges `ONEWAY, PARENT_SEGID, TNED_ID`; raw nodes `NODE_KIND` (street/freeway/split). Freeway rows: `Func_Class` = TNED FC, `RD20FULL` = TNED NM, `LINK_KIND` freeway/fwy_connector/ramp. IDs: freeway node 300,000,000 + HNODE, split node 310,000,000 + HNODE, freeway ROADSEGID 900,000,000 + HWYCOV0_ID, split piece 800,000,000 + 10 × parent + k.
+
+  | | LG | DT |
+  |---|---|---|
+  | ramp ends: snapped / split candidates / not joined | 9 / 3 / 1 (College Grove) | 32 / 6 / 1 (Ash St) |
+  | splits used (links split) | 2: Massachusetts Av, Jamacha Rd (Federal Bl unused) | 6 on 5 links: State, Cedar, Pershing ×2, B St, G St |
+  | dropped as parallel (duplicate ramp branch, faster kept) | 37235 (SR-94 WB off-ramp branch to Lemon Grove Av) | 30890 (5th Av on-ramp to I-5 SB; "5TH HOV" 50795 kept) |
+  | **freeway links kept** | **27, 5.74 mi** (11 freeway, 1 connector, 15 ramp; all one-way) | **100, 14.90 mi** (31 / 8 / 61; 99 one-way) |
+  | links / nodes / edges | 1,314 / 1,067 (20 freeway + 2 split) / 2,601 | 1,177 / 800 (70 + 6) / 2,255 |
+  | sum of edge times ÷ free flow EA / AM / MD / PM / EV | 1.256 / 1.369 / 1.275 / 1.365 / 1.258 | 1.903 / 2.129 / 1.981 / 2.142 / 1.907 |
+  | freeway edges alone (AM; by kind) | 2.46 (freeway 1.17, connector 2.0, ramp 3.75) | 1.62 (1.35 / 1.18 / 1.80) |
+
+  - **Unchanged (checked):** first N rows of `nodes.csv`; `mgra_access`; mapping files and all demand files byte-identical to the backup; street period times on unsplit edges exactly equal; split pieces sum to the parent's times (≤ 3e-14 s); class delays and match counts as before.
+  - **Effect on demand trips** (shortest paths over all OD pairs, scratchpad `compare_fwy.py`): no trip slower. Mean time LG free / EA / AM / MD / PM / EV −0.2 / −0.7 / −0.1 / −0.5 / −0.1 / −0.6%, trips using a freeway 0.8 / 3.2 / 0.3 / 2.4 / 0.5 / 3.1%; DT −1.3 / −2.7 / −1.7 / −2.6 / −1.8 / −2.7%, trips using a freeway 2.3 / 4.7 / 3.2 / 4.5 / 3.3 / 4.7%. Trips that use one save 10–21% on average (min ratio 0.27). Fewer use them in AM/PM because of the ramp delays.
+  - **Extent stays as is (user, 2026-11-20).** LG keeps only 5.7 of the 14.9 freeway miles inside the area, because its interchanges sit near the edges (on-ramps that lead out, off-ramps reached only from outside). A scratchpad test (`lg_extend_test.py`) widened the LG street + freeway extent by 0.5 mi / 1 mi: freeway kept 10.3 / 24.8 mi, but freeway use did not rise (AM 0.32% → 0.27% of trips); mean trip time −0.5 to −0.9% in every period, all from about 2% of trips cutting across streets just outside the boundary (both buffers identical); no trip slower. Not adopted: 2–3.4× the nodes, vehicles outside the area, and the dropped street pieces would reconnect (pickups, mapping and demand would change).
+  - The first real run failed: QGIS (three `qgis-bin.exe`) held `Lemon_grove_roads.shp`. `Lemon_grove_raw_edges.csv` had been rewritten; it was restored from the backup (outputs checked equal to the backup) before the rerun.
 
 ## Demand file redo for ABM3 (decisions 2026-11-19; built 2026-11-19, see "Demand build")
 

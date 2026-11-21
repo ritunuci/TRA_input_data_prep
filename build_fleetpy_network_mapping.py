@@ -9,13 +9,21 @@ network/ (inputs, from build_bikenet_networks.py)
 
 network/ (written here)
   pre_nodes.csv, pre_edges.csv   process_network.create_network_from_raw_edges():
-                                 every link -> two edges (one-way ignored), distance ft -> m,
+                                 every link -> two edges, a link with ONEWAY = 1 (TNED freeways and
+                                 ramps) -> one edge; distance ft -> m,
                                  travel_time = distance / max(SPEED, 10 mph) (free flow), pickup nodes from
                                  the IS_DEMAND column, FleetPy IDs 0..N-1 in order of Bike_Net node ID.
                                  is_stop_only is then set to False for every node (user decision
-                                 2026-11-19), replacing the function's random 0.35%.
+                                 2026-11-19), replacing the function's random 0.35%. Split nodes
+                                 (NODE_KIND split: on a pickup street, where a ramp joins mid-block)
+                                 get is_demand_node = 0: they are not pickup nodes.
   nodes.csv, edges.csv           process_network.write_node_edge_from_pre_node_edge():
                                  the same network with FleetPy node IDs.
+  <prefix>_edge_kind.csv         from_node, to_node, ROADSEGID, link_kind per edge of edges.csv (FleetPy IDs):
+                                 street / alley / driveway (walkable) or freeway / fwy_connector / ramp (car
+                                 only), so that MTSM can keep walking, virtual stops and FRT stop joining on
+                                 streets.
+  <prefix>_node_kind.csv         node, raw_node, kind (street / freeway), split (1 = split node, a street node).
 
 mapping/ (written here; node IDs are FleetPy IDs)
   Nodes_MGRA_mapping.csv   node, MGRA, raw_node, source. One row per (pickup node, zone):
@@ -28,8 +36,8 @@ mapping/ (written here; node IDs are FleetPy IDs)
                            generate_demand_files.create_tt_demand_file() reads.
   MGRA_Nodes_mapping.csv   MGRA, nodes (list of FleetPy node IDs), as in the old files.
 
-Checks (stops on failure): node IDs 0..N-1; edges = 2 x links, no duplicate edges; one connected
-network; pickup nodes equal the raw IS_DEMAND nodes; every zone in <prefix>_MGRA15.csv has >= 1 node;
+Checks (stops on failure): node IDs 0..N-1; edges = 2 x two-way links + one-way links, no duplicate
+edges; one connected and strongly connected network; pickup nodes equal the raw IS_DEMAND nodes; every zone in <prefix>_MGRA15.csv has >= 1 node;
 every mapped node is a pickup node.
 
 Usage (from the repo folder; see CLAUDE.md "Running" for the env + PATH setup):
@@ -46,6 +54,7 @@ import sys
 import numpy as np
 import pandas as pd
 
+import build_bikenet_networks as p_bn
 import process_network as p_n
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,21 +70,28 @@ AREAS = {
 }
 
 
-def set_no_stop_only(pre_node_file):
-    """Rewrite pre_nodes.csv with is_stop_only = False for every node (same csv layout as process_network)."""
+def fix_pre_nodes(pre_node_file, not_pickup=()):
+    """Rewrite pre_nodes.csv with is_stop_only = False for every node and is_demand_node = 0 for the raw node IDs in
+    not_pickup (freeway and split nodes: a split node lies on a pickup street but is not a pickup node).
+    Same csv layout as process_network. Returns (stop-only nodes before, pickup flags removed)."""
+    not_pickup = {str(n) for n in not_pickup}
     with open(pre_node_file, newline="") as f:
         reader = csv.DictReader(f)
         fields = reader.fieldnames
         rows = list(reader)
     n_before = sum(r["is_stop_only"] == "True" for r in rows)
+    n_unpick = 0
     for r in rows:
         r["is_stop_only"] = "False"
+        if r["node_index"] in not_pickup and r["is_demand_node"] != "0":
+            r["is_demand_node"] = "0"
+            n_unpick += 1
     with open(pre_node_file, "w", newline="") as f:
         w = csv.writer(f, delimiter=",", quotechar="|", quoting=csv.QUOTE_MINIMAL)
         w.writerow(fields)
         for r in rows:
             w.writerow([r[k] for k in fields])
-    return n_before
+    return n_before, n_unpick
 
 
 def n_components(edges):
@@ -95,6 +111,13 @@ def n_components(edges):
     return len({find(x) for x in list(parent)})
 
 
+def n_strong_components(edges):
+    """Number of strongly connected components of the directed edges (Kosaraju, iterative)."""
+    lab = p_bn.scc_labels(sorted(set(edges["from_node"]) | set(edges["to_node"])),
+                          list(zip(edges["from_node"], edges["to_node"])))
+    return len(set(lab.values()))
+
+
 def build_area(name, cfg, out_root, overwrite):
     net_dir = os.path.join(out_root, name, "network")
     map_dir = os.path.join(out_root, name, "mapping")
@@ -106,7 +129,8 @@ def build_area(name, cfg, out_root, overwrite):
     pre_nodes, pre_edges = os.path.join(net_dir, "pre_nodes.csv"), os.path.join(net_dir, "pre_edges.csv")
     nodes_f, edges_f = os.path.join(net_dir, "nodes.csv"), os.path.join(net_dir, "edges.csv")
     n2m, m2n = os.path.join(map_dir, "Nodes_MGRA_mapping.csv"), os.path.join(map_dir, "MGRA_Nodes_mapping.csv")
-    for p in (pre_nodes, pre_edges, nodes_f, edges_f, n2m, m2n):
+    ek_f, nk_f = pfx + "_edge_kind.csv", pfx + "_node_kind.csv"
+    for p in (pre_nodes, pre_edges, nodes_f, edges_f, n2m, m2n, ek_f, nk_f):
         if os.path.exists(p) and not overwrite:
             sys.exit(f"ERROR: {p} exists. Use --overwrite.")
 
@@ -116,8 +140,11 @@ def build_area(name, cfg, out_root, overwrite):
     np.random.seed(SEED)
 
     p_n.create_network_from_raw_edges(raw_edges, pre_nodes, pre_edges)
-    n_stop = set_no_stop_only(pre_nodes)
-    print(f"  is_stop_only set to False for all nodes (the function had drawn {n_stop})")
+    rn0 = pd.read_csv(raw_nodes)
+    not_pick = rn0.loc[rn0["NODE_KIND"] != "street", "NODE"] if "NODE_KIND" in rn0 else []
+    n_stop, n_unpick = fix_pre_nodes(pre_nodes, not_pick)
+    print(f"  is_stop_only set to False for all nodes (the function had drawn {n_stop}); "
+          f"pickup flag removed from {n_unpick} split node(s) on pickup streets")
     nodes_fleetpy, demand_nodes = p_n.write_node_edge_from_pre_node_edge(nodes_f, edges_f, pre_nodes, pre_edges)
 
     # ---- network checks
@@ -129,16 +156,20 @@ def build_area(name, cfg, out_root, overwrite):
         sys.exit("ERROR: node_index is not 0..N-1 in order.")
     if len(nodes) != len(rn) or set(nodes_fleetpy) != set(rn["NODE"]):
         sys.exit(f"ERROR: {len(nodes)} FleetPy nodes vs {len(rn)} raw nodes.")
-    if len(edges) != 2 * len(raw) or edges.duplicated(["from_node", "to_node"]).any():
-        sys.exit("ERROR: edges are not exactly two per link without duplicates.")
+    n_one = int(raw["ONEWAY"].sum()) if "ONEWAY" in raw else 0
+    if len(edges) != 2 * len(raw) - n_one or edges.duplicated(["from_node", "to_node"]).any():
+        sys.exit("ERROR: edges are not exactly two per two-way link and one per one-way link, without duplicates.")
     if nodes["is_stop_only"].astype(str).ne("False").any():
         sys.exit("ERROR: some node is still stop-only.")
     if n_components(edges) != 1:
         sys.exit("ERROR: the network is not connected.")
+    if n_strong_components(edges) != 1:
+        sys.exit("ERROR: the network is not strongly connected (some node cannot be reached or left).")
     raw_pick = set(rn.loc[rn.IS_DEMAND == 1, "NODE"])
     if {nodes_fleetpy[n] for n in raw_pick} != set(demand_nodes):
         sys.exit("ERROR: pipeline pickup nodes differ from the raw IS_DEMAND nodes.")
-    print(f"  nodes {len(nodes)}, edges {len(edges)} (2 x {len(raw)} links), pickup nodes {len(demand_nodes)}, "
+    print(f"  nodes {len(nodes)}, edges {len(edges)} ({len(raw)} links, {n_one} one-way), strongly connected, "
+          f"pickup nodes {len(demand_nodes)}, "
           f"travel_time s min/median/max {edges.travel_time.min():.1f} / {edges.travel_time.median():.1f} / "
           f"{edges.travel_time.max():.1f}")
 
@@ -180,7 +211,27 @@ def build_area(name, cfg, out_root, overwrite):
           f"nodes per zone min/median/max {per_zone.min()} / {int(per_zone.median())} / {per_zone.max()}; "
           f"zones with a single node: {int((per_zone == 1).sum())}; "
           f"nodes listed for two zones: {int(mp.node.duplicated().sum())}")
-    for p in (pre_nodes, pre_edges, nodes_f, edges_f, n2m, m2n):
+    # ---- edge and node kinds (FleetPy IDs), so that MTSM can keep walking, virtual stops and FRT stop joining
+    #      on streets: link_kind street / alley / driveway (walkable) or freeway / fwy_connector / ramp (car only)
+    ek = edges[["from_node", "to_node"]].copy()
+    ek["ROADSEGID"] = edges["source_edge_id"].astype(int)
+    ek["link_kind"] = ek["ROADSEGID"].map(raw.set_index("ROADSEGID")["LINK_KIND"])
+    if ek["link_kind"].isna().any():
+        sys.exit("ERROR: an edge has no LINK_KIND.")
+    raw_of = {v: k for k, v in nodes_fleetpy.items()}
+    nk = pd.DataFrame({"node": nodes["node_index"], "raw_node": nodes["node_index"].map(raw_of)})
+    kind = rn.set_index("NODE")["NODE_KIND"] if "NODE_KIND" in rn else pd.Series("street", index=rn["NODE"])
+    nk["kind"] = nk["raw_node"].map(kind).replace({"split": "street"})
+    nk["split"] = (nk["raw_node"].map(kind) == "split").astype(int)
+    fwy_nodes = set(nk.loc[nk.kind == "freeway", "node"])
+    walk = ek["link_kind"].isin(["street", "alley", "driveway"])
+    if (ek.loc[walk, "from_node"].isin(fwy_nodes) | ek.loc[walk, "to_node"].isin(fwy_nodes)).any():
+        sys.exit("ERROR: a street edge touches a freeway node.")
+    ek.to_csv(ek_f, index=False)
+    nk.to_csv(nk_f, index=False)
+    print(f"  edge kinds {ek.link_kind.value_counts().to_dict()}; node kinds {nk.kind.value_counts().to_dict()} "
+          f"(split nodes {int(nk.split.sum())})")
+    for p in (pre_nodes, pre_edges, nodes_f, edges_f, n2m, m2n, ek_f, nk_f):
         print(f"  wrote {p}")
 
 
