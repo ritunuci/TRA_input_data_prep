@@ -76,6 +76,10 @@ $E="C:\Users\ritun_uci\.conda\envs\shftn_trvlrs"; $env:PATH="$E;$E\Library\mingw
 - `modify_ind_parameter`: reads an existing beta file and **draws all betas again** (15 columns, split waiting betas). Despite the name, it doesn't adjust the existing values.
 - `synthesize_requests_with_trend_time` (`syn_rq`; the user added the upscaling section): imported by the `run_examples_new*.py` drivers, and actively called in `_parking.py` and `_TRC_R1.py`. New rows are appended at the end, not sorted. A suggested fix (not applied) is to sort by `["rq_time","request_id"]` after the concat and not renumber IDs. New rows have NaN betas when the input has beta columns.
 
+## Open items
+
+- **MTSM must keep walking and stops off the freeways** (opened 2026-11-20, user asked to keep it open). Since commit eed31f6 the LG/DT networks contain TNED freeways, connectors and ramps (one-way edges). MTSM's `pre_process/build_super_network.py` (checked at b38d7ba) puts a walk link on every road edge, draws virtual stops from all road nodes, joins FRT stops to the nearest road node, and assumes two edges per road segment. Before MTSM uses the new networks, its builder must use `outputs_MGRA15/<area>/network/<prefix>_edge_kind.csv` (`link_kind` street/alley/driveway = walkable; freeway/fwy_connector/ramp = car only) and `<prefix>_node_kind.csv` (`kind` street/freeway) for walk links, virtual stops and stop joining. The car network (`auto_edges.csv`) and microtransit driving can use every edge. Not started; the MTSM work and tests wait for the user ("we will do it later"). Details: "Freeways and ramps from TNED", MTSM consequence; README section 6.
+
 ## Known issues (not fixed; tell the user before changing them)
 
 - Sorting `rq_time` compares text (L238, L647). **FleetPy loads requests grouped by rq_time** (`src/demand/demand.py:106`), so file order doesn't affect simulation results. It only matters for other tools that read the files.
