@@ -594,6 +594,10 @@ generate_demand_files.py           legacy MGRA13/ABM2-era demand pipeline (selec
                                    map_mgra_to_nodes, TRPartA_demand_files, synthesize_requests_with_trend_time,
                                    ...). Not used by the steps above; kept for reference and older studies
 rebuild_mgra_road_overlays.py      legacy: rebuilds the MGRA13 QGIS overlay CSVs used by generate_demand_files.py
+build_super_network.py             copy of MTSM's pre_process/build_super_network.py (MTSM 008c6ac, unchanged):
+                                   builds an MTSM super-network (walk, FRT, microtransit) from a road network and
+                                   an FRT stop/edge network. Not yet run here; it does not keep walking, virtual
+                                   stops or FRT stops off the freeways (MTSM I-33)
 CLAUDE.md                          detailed working notes: every decision, check and count behind the pipeline
 ```
 
