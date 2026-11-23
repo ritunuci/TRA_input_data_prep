@@ -548,6 +548,17 @@ Bike_Net has no freeways or ramps. The user wants them in the network, taken fro
 - One-direction variants: LG 916 and 917 (dir 1 only), DT 992 (dir 1, a loop: 14 stop nodes, 26 links).
 - Route ÷ straight-line distance: median 1.00; max LG 1.55 (936), DT 3.71 (923205 around a block), 3.07 (11118).
 - 994 has fare $0 in trrt; all others $2.50.
+- **Route tails inside the area are not in the network (checked 2026-11-23; user: keep as is).** A route line that runs on from its last inside stop to a stop outside has no link for that piece, though the line is inside the area (the both-stops-inside rule). LG (scratchpad `frt_lg_gap.py`):
+
+  | Route | Last stop inside → next stop (ft outside) | Line inside, no link |
+  |---|---|---|
+  | 520 trolley, SW | Massachusetts Av → Encanto/62nd St (4,256) | 5,060 ft, both directions |
+  | 520 trolley, NE | Lemon Grove Depot → Spring Street (3,150) | 1,882 ft |
+  | 856/916/917/936, NW | College Pl/Federal → Racine/College Grove (484) | 1,194 ft |
+  | 851, east | Blossom/Sweetwater → Tyler/Spring Grove (540) | 535 ft |
+  | 916/917, SW | Madera/Primera → Madera/Hilger (748) | 331 ft |
+
+  No effect on trips inside the area: there is no stop on these pieces, and no route loses a connection between two inside stops (in every LG variant, links = stops − 1). Rejected alternatives: add the next outside stop (Encanto would join a street node ~0.8 mi away) or a boundary stop where the line leaves the area (a stop where no station exists). DT not checked the same way.
 - **MTSM test** (our copy of `build_super_network.py`, `--variant non_micro --headway 10`, output in the scratchpad only): both areas read fine; LG 122 stops, 45 walk nodes with a stop, links walk 2,601 / FRT 110 / FRT wait 244; DT 354 stops, 109 walk nodes, 2,255 / 326 / 708; largest stop → walk node distance 0.0. Walk links still include freeway edges (I-33).
 
 ## Working with this user

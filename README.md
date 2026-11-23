@@ -624,6 +624,11 @@ With the same inputs and seed, a rebuild reproduces these numbers and files exac
   ABM3 headways and fares are only copied to `frt_routes.csv`.
 - **The route line counts, not the straight line.** On a few Downtown links the route goes around a block, so the
   link is up to 3.7 × the straight distance between its stops.
+- **Route lines end at the last stop inside the area.** Where a route runs on from its last inside stop to a stop
+  outside, that piece has no link, even inside the area. In Lemon Grove the largest is the trolley (520) between
+  Massachusetts Av station and the area's southwest edge (0.96 mi; the next station, Encanto/62nd St, is 0.8 mi
+  outside). No trip inside the area is affected: there is no stop on these pieces. The gdb route lines therefore
+  reach further in QGIS than `frt_links.shp`.
 
 **Running the scripts**
 
