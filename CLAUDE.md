@@ -13,6 +13,7 @@ build_bikenet_networks.py              MGRA15-era LG/DT road networks from Bike_
 build_fleetpy_network_mapping.py       FleetPy nodes/edges + zone -> pickup node mapping from those networks
 build_period_travel_times.py           5-period link times from the ABM3 assignment (TNED hwyload) + FleetPy network folder
 build_abm3_demand_files.py             ABM3 demand files (trip requests with betas) on the MGRA15 networks
+build_super_network.py                 copy of MTSM pre_process/build_super_network.py (MTSM 008c6ac, unchanged); see "Open items"
 Cupertino_Network_fullnetwork.ipynb    unrelated Cupertino notebook; still points to C:\Users\11643\... and D:\UCI Research\...
 data_current_script/                   copy of the data; its subfolders mirror D:/Ritun/Siwei_Micro_Transit
 data_new/                              new data added by the user (ABM3 demand, MGRA15 layer, DT/LG GIS); see "data_new/"
@@ -78,7 +79,28 @@ $E="C:\Users\ritun_uci\.conda\envs\shftn_trvlrs"; $env:PATH="$E;$E\Library\mingw
 
 ## Open items
 
-- **MTSM must keep walking and stops off the freeways** (opened 2026-11-20, user asked to keep it open). Since commit eed31f6 the LG/DT networks contain TNED freeways, connectors and ramps (one-way edges). MTSM's `pre_process/build_super_network.py` (checked at b38d7ba) puts a walk link on every road edge, draws virtual stops from all road nodes, joins FRT stops to the nearest road node, and assumes two edges per road segment. Before MTSM uses the new networks, its builder must use `outputs_MGRA15/<area>/network/<prefix>_edge_kind.csv` (`link_kind` street/alley/driveway = walkable; freeway/fwy_connector/ramp = car only) and `<prefix>_node_kind.csv` (`kind` street/freeway) for walk links, virtual stops and stop joining. The car network (`auto_edges.csv`) and microtransit driving can use every edge. Not started; the MTSM work and tests wait for the user ("we will do it later"). Details: "Freeways and ramps from TNED", MTSM consequence; README section 6.
+- **MTSM must keep walking and stops off the freeways** (opened 2026-11-20, user asked to keep it open). Since commit eed31f6 the LG/DT networks contain TNED freeways, connectors and ramps (one-way edges). MTSM's `pre_process/build_super_network.py` (checked at b38d7ba) puts a walk link on every road edge, draws virtual stops from all road nodes, joins FRT stops to the nearest road node, and assumes two edges per road segment. Before MTSM uses the new networks, its builder must use `outputs_MGRA15/<area>/network/<prefix>_edge_kind.csv` (`link_kind` street/alley/driveway = walkable; freeway/fwy_connector/ramp = car only) and `<prefix>_node_kind.csv` (`kind` street/freeway) for walk links, virtual stops and stop joining. The car network (`auto_edges.csv`) and microtransit driving can use every edge. Not started; the MTSM work and tests wait for the user ("we will do it later"). Details: "Freeways and ramps from TNED", MTSM consequence; README section 6. (MTSM tracks this as its I-33 in `docs/open_issues.md`.)
+- **MTSM must work for any study area and for the new FRT network** (opened 2026-11-23; the user adds it to MTSM's `docs/open_issues.md` as **I-34**, text written in this session; the user will generalize MTSM). Checked at MTSM `008c6ac`:
+  1. FRT line length, duration, cost, VMT and ridership output (`output_performance_metrics.py`) are Lemon Grove only. A Downtown run crashes at `scenarios.py:90` (`UnboundLocalError`). The line length = sum of *unique distance values* per route, which works only because the old network had identical distances in both directions.
+  2. The FRT fare and microtransit start fare are charged only when `study_area == "lemon_grove"` (`network_algorithms.py:352, :372`). Other areas pay $0.
+  3. `read_super_network` uses `nx.DiGraph`, so a second link with the same node pair silently overwrites the first.
+  4. With stop nodes per route, a route change becomes alight (0 s) + board (headway/2). There is no new fare (`transit_fare` is not set after a waiting link), and `bt_f_trfer` applies if the penalty is on. This changes results against the reference.
+  5. 70 lines name Lemon Grove (`"lemon_grove"` / `LG_`).
+- **FRT network decisions (user, 2026-11-23); the builder is not written yet:**
+  - Source: `data_new/network/EMMEOutputs.gdb` (`trrt`, `trlink`, `trstop`, `TransitRoute`). It equals the ABM3 run's transit input (`shaqa_new_result/input`, scenarioYear 2022). `data_new/gtfs_transit_net/` is SANDAG "Transit Routes 2025" (scenario 462): no stops and more frequent headways. It is not used.
+  - Outputs: `build_super_network.py` inputs `frt_stops.csv` (`stop_id,pos_x,pos_y`) and `frt_edges.csv` (`from_stop,to_stop,distance,travel_time,route`; directed rows).
+  - One stop node per TNED stop node × route × direction. Proposed `stop_id` = (route × 10 + dir) × 100,000 + TNED node.
+  - `route` = route number (both directions). MTSM's cost code treats it as a line run both ways (× 2).
+  - Run time = distance along the route ÷ 30 mph, rail included (not `RUNTIME`).
+  - One headway for all routes.
+  - One variant per route and direction:
+    - Downtown keeps `510108/208`, `20102/202`, `120116/216` and drops the peak-only 110, 280, 290.
+    - 398, 598 and 994 drop out by themselves (one stop inside).
+    - LG has nothing to choose: 4, 520, 856, 916, 917, 936; 851 has no stop inside.
+  - Links: both stops inside the area.
+  - Stops joined to our street nodes only (`node_kind` street, split allowed). `pos_x/pos_y` = that node's coordinates.
+  - Optional `frt_routes.csv` (route, dir, mode, stops, length) for MTSM's line cost.
+- **`build_super_network.py`** (root) was placed here by the user on 2026-11-23. It is a byte-identical copy of MTSM `pre_process/build_super_network.py` at `008c6ac`; the file was last changed in MTSM at b38d7ba. It does not yet apply the freeway rule (I-33).
 
 ## Known issues (not fixed; tell the user before changing them)
 
