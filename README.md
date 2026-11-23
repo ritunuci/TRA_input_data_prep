@@ -38,15 +38,20 @@ run the pipeline, put your own copies of the raw files in the folders listed bel
  final_trips.csv, final_households.csv, final_persons.csv, mgra15.shp
                       ▼
  [5] build_abm3_demand_files.py      → demand/<area>_trips_nodes_study_area_with_beta.csv (+ debug, trace, dropped)
+
+ EMMEOutputs.gdb (trrt, TransitRoute, trstop, TNED_HwyNodes, TNED_RailNodes) + network/ from step 3
+                      ▼
+ [6] build_frt_network.py            → frt/frt_stops.csv, frt_edges.csv, frt_routes.csv, frt_stops.shp, frt_links.shp
 ```
 
-Each step reads the outputs of the step before it, so run them in this order. Every script:
+Each step reads the outputs of the step before it, so run them in this order. Step 6 needs only steps 1–3. Every
+script:
 
 - builds **both areas** by default (`--areas lemon_grove downtown_sd`);
 - **refuses to overwrite** existing outputs unless you pass `--overwrite`;
 - stops with an `ERROR:` message when an input check fails.
 
-Steps 2–5 accept `--out-root` (default `outputs_MGRA15/`).
+Steps 2–6 accept `--out-root` (default `outputs_MGRA15/`).
 
 ---
 
@@ -109,7 +114,11 @@ create them and copy your files in.
 | `data_new/network/EMMEOutputs.gdb`, layer `Bike_Net_2022_Build` | SANDAG ABM3 network export (bike network built from Roads_All) | 2 | `A`, `B`, `ROADSEGID`, `RD20FULL` (street name), `Func_Class`, `SPEED` (mph), `AB_Lanes`, `BA_Lanes`, `Distance`, geometry (EPSG:2230) |
 | same gdb, layer `Bike_Node_2022_Build` | same | 2 | `NodeLev_ID`, `XCOORD`, `YCOORD`, `MGRA` (set only on MGRA centroid nodes) |
 | same gdb, layer `TNED_HwyNet` | ABM3 highway network | 2 (freeways), 4 | `HWYCOV0_ID`, `NM` (name), `FC`, `LENGTH` (**miles**), `WAY`, `SPD`, `AN`, `BN`, `BALN*` (BA lanes per period), `HOV`, `TOLL*`, geometry (digitised AN→BN) |
-| same gdb, layer `TNED_HwyNodes` | same | 2 | `HNODE`, `X_COORD`, `Y_COORD` |
+| same gdb, layer `TNED_HwyNodes` | same | 2, 6 | `HNODE`, `X_COORD`, `Y_COORD` |
+| same gdb, layer `TNED_RailNodes` | ABM3 rail network nodes (rail stations) | 6 | `HNODE`, `X_COORD`, `Y_COORD` |
+| same gdb, layer `trrt` | ABM3 transit route variants (the run's `input/trrt.csv`, scenario year 2022) | 6 | `Route_ID`, `Route_Name` (= route × 1,000 + direction × 100 + configuration), `Mode`, `*_Headway` (min), `EarlyAM_Hours`, `Evening_Hours`, `Fare` ($) |
+| same gdb, layer `TransitRoute` | route lines of the same variants | 6 | `RouteID` (= `Route_Name`), `Route`, `Direction` (1/2), `Operator`, `Start`, `Stop`, `SHAPE_Length` (ft), geometry |
+| same gdb, layer `trstop` | stops of each variant, in order | 6 | `Stop_ID` (order), `Route_ID`, `Node` (TNED node), `Milepost` (**miles** from the first stop), `StopName` |
 | `hwyload_EA.csv`, `hwyload_AM.csv`, `hwyload_MD.csv`, `hwyload_PM.csv`, `hwyload_EV.csv` | ABM3 run `report/` folder: assigned (loaded) link times per period (streets and freeways) | 4 (`--hwyload-dir`) | `ID1` (= `HWYCOV0_ID`), `AB_Time`, `BA_Time` (**minutes**) |
 | `data_new/demand_data/final_trips.csv` | ABM3 resident model output (12 GB, 12.8 M rows) | 5 | `trip_id`, `person_id`, `household_id`, `origin`, `destination` (MGRA15), `depart` (half-hour period 1–48), `trip_period`, `trip_mode`, `purpose` |
 | `data_new/demand_data/final_households.csv` | ABM3 output | 5 | `household_id`, `income`, `num_workers`, `auto_ownership` |
@@ -390,6 +399,44 @@ MTSM reads it as the free-flow time.
 **Checks** (the script stops on failure): no request has start = end; every node belongs to its trip's zone
 mapping; no NaN; `rq_time` is sorted; `transit_pass` is 0/1.
 
+### Step 6: FRT network (`build_frt_network.py`)
+
+Writes the fixed-route transit (FRT) inputs of MTSM's `build_super_network.py` from the ABM3 transit network in
+`EMMEOutputs.gdb` (`trrt`, `TransitRoute`, `trstop`; the same tables as the ABM3 run's `input/`). SANDAG's
+"Transit Routes 2025" layer (`data_new/gtfs_transit_net/`) is not used: it has no stops.
+
+1. **Route variants:** every variant in the gdb except the area's `exclude` list in `AREAS`, so that each route and
+   direction has one variant. Downtown drops `510119/510219`, `20114/20214`, `120112/120212` (other configurations
+   of 510, 20, 120) and the peak-only 110, 280, 290. Lemon Grove drops none. The script stops if two variants of
+   a route and direction both get links.
+2. **Stops in the area:** a stop counts if its TNED node lies within **50 ft** of the area's MGRA15 union
+   (`TOLERANCE_FT`), so stops on boundary streets count.
+3. **Links:** one per pair of consecutive stops of a variant (`Stop_ID` order, which is also `Milepost` order)
+   with both stops in the area. A variant that leaves the area and comes back gets no link across the gap.
+   - `distance` = milepost difference × 1,609.344 m (the distance along the route);
+   - `travel_time` = distance ÷ **30 mph**, for bus and rail alike (`SPEED_MPH`);
+   - `route` = the route number, shared by both directions;
+   - if a loop gives the same (from, to) pair twice, the shorter link is kept (none in the current build).
+4. **Stop nodes:** one per TNED node × route × direction:
+   `stop_id` = (route × 10 + direction) × 100,000 + TNED node. A loop that revisits a stop reuses its stop node.
+5. **Join to the road network:** each stop is joined to the nearest **street** node of `nodes.csv`
+   (`<prefix>_node_kind.csv` kind street; split nodes allowed, never a freeway node; a tie goes to the smaller
+   node). `pos_x/pos_y` = that street node's coordinates, so MTSM's nearest-walk-node join picks exactly that node.
+   All stops are kept; joins over 300 ft are listed.
+
+**Outputs** (`outputs_MGRA15/<area>/frt/`):
+
+| File | Content |
+|---|---|
+| `frt_stops.csv` | `stop_id, pos_x, pos_y` (read by MTSM), then `route, direction, route_variant, tned_node, stop_name, mode, street_node, join_dist_ft, tned_x, tned_y, dist_outside_ft`. Only stops with a link |
+| `frt_edges.csv` | `from_stop, to_stop, distance, travel_time, route` (read by MTSM), then `direction, route_variant, mode, from_tned_node, to_tned_node, from_milepost, to_milepost` |
+| `frt_routes.csv` | one row per kept variant: `route, direction, route_variant, mode, mode_name, operator, start, end, n_stops, n_links, length_m` (inside the area), `route_length_mi` (whole variant), ABM3 headways `headway_ea … headway_ev` (min), `hours_ea, hours_ev`, `fare` ($). Reference only |
+| `frt_stops.shp`, `frt_links.shp` | QGIS: stops at their TNED location; links as the piece of the route line between their mileposts (`geom_src` route, or straight if the line can't be cut) |
+
+**Checks** (the script stops on failure): mileposts strictly increase along every variant; every stop node has
+TNED coordinates; the excluded variants exist; one variant per route and direction; every edge stop is in the
+stop file; no duplicate (from, to); distance > 0; `stop_id` unique and < 2³¹; every stop joined to a street node.
+
 ---
 
 ## 5. Output layout
@@ -406,6 +453,7 @@ outputs_MGRA15/
     fleetpy_network/  base/, 0/, 10800/, 21600/, 32400/, 55800/, 68400/, network_dynamics.csv (step 4)
     demand/       <area>_trips_nodes_study_area_with_beta.csv, _debug_..., _trips_trace.csv,
                   _dropped_trips.csv                                                        (step 5)
+    frt/          frt_stops.csv, frt_edges.csv, frt_routes.csv, frt_stops.shp, frt_links.shp (step 6)
 ```
 
 All coordinates are **EPSG:2230** (NAD83 / California zone 6, US ft). Node IDs in every FleetPy-facing file are
@@ -444,6 +492,10 @@ Bike_Net-style link files keep feet and mph.
 | demand files | `rq_time` | seconds after midnight (3:00 = 10,800; trips after midnight run past 86,400) |
 | | `parking_dur_min` (Downtown) | minutes |
 | | `income` | dollars per year, per worker |
+| `frt/frt_edges.csv` | `distance` / `travel_time` | meters / seconds |
+| | `from_milepost`, `to_milepost` | miles |
+| `frt/frt_stops.csv` | `pos_x`, `pos_y`, `tned_x`, `tned_y`; `join_dist_ft`, `dist_outside_ft` | feet (EPSG:2230) |
+| `frt/frt_routes.csv` | `length_m` / `route_length_mi` / `headway_*` / `fare` | meters / miles / minutes / dollars |
 
 The ABM3 inputs use other units: `hwyload_*.csv` `AB_Time`/`BA_Time` are in minutes, TNED `LENGTH` is in miles
 and `SPD` in mph, and `final_trips.csv` `depart` is a half-hour period (1–48).
@@ -467,6 +519,11 @@ and `SPD` in mph, and `final_trips.csv` `depart` is a half-hour period (1–48).
 | dropped: income 0 / no distinct node | 512 / 527 | 6,911 / 16,665 |
 | **requests written** / debug | **42,698** / 427 | **184,751** / 1,848 |
 | mean per-worker income | 64,785.7 | 81,410.0 |
+| FRT (2026-11-23): routes | 7: 4, 520, 851, 856, 916, 917, 936 | 21: 2, 3, 4, 5, 7, 11, 12, 20, 83, 120, 215, 225, 235, 510, 520, 530, 901, 923, 929, 992, 994 |
+| FRT variants / stop nodes / links | 12 / 122 / 110 | 41 / 354 / 326 |
+| FRT TNED stop nodes (on boundary, ≤ 50 ft out) / street nodes joined | 45 (7) / 45 | 112 (9) / 109 |
+| FRT link length (sum of directed links) | 28.46 mi | 58.07 mi |
+| FRT join distance median / p90 / max | 0 / 146 / 303 ft | 0 / 127 / 635 ft |
 
 With the same inputs and seed, a rebuild reproduces these numbers and files exactly.
 
@@ -492,6 +549,13 @@ With the same inputs and seed, a rebuild reproduces these numbers and files exac
   two edges per road segment. With freeways in the network, use `<prefix>_edge_kind.csv` and `_node_kind.csv` to
   keep walking, virtual stops and stop joining on streets. Car (`auto_edges.csv`) and microtransit driving can use
   every edge.
+- **FRT in MTSM's super-network:** pass `network/nodes.csv`, `network/edges.csv`, `frt/frt_stops.csv` and
+  `frt/frt_edges.csv` to `build_super_network.py` (`--road-nodes --road-edges --frt-stops --frt-edges`). A test run
+  (`--variant non_micro --headway 10`) reads both areas; every stop lands on its street node at 0 ft.
+  - `route` is the route number for both directions; MTSM's line cost counts a route as a line run both ways.
+  - MTSM (008c6ac) charges the FRT fare and computes line length, cost and ridership output only for Lemon Grove;
+    a Downtown run fails. MTSM tracks this as I-34.
+  - Until MTSM I-33 is done, its builder still puts walk links on freeway edges (see the next point).
 - **Demand file in MTSM:**
   - MTSM reads the demand file with `read_request`, which picks columns by name and ignores the extra ones.
   - It then writes FleetPy's own request file with only `rq_time, start, end, request_id`.
@@ -551,6 +615,16 @@ With the same inputs and seed, a rebuild reproduces these numbers and files exac
 - **The two directions of a link can differ a lot.** TNED puts its delay at the downstream end of each link, and
   the script spreads it over the link's length.
 
+**FRT network**
+
+- **Stops are moved onto a street node.** MTSM boards and alights at the stop's nearest walk node with no walk in
+  between, and step 6 writes that street node's coordinates as the stop position. Most stops sit on a node
+  (median 0 ft); a few are moved up to 303 ft (Lemon Grove) / 635 ft (Downtown, County Admin Bldg on N Harbor Dr).
+- **Run times are not ABM3's.** Every link runs at 30 mph over the distance along the route, rail included; the
+  ABM3 headways and fares are only copied to `frt_routes.csv`.
+- **The route line counts, not the straight line.** On a few Downtown links the route goes around a block, so the
+  link is up to 3.7 × the straight distance between its stops.
+
 **Running the scripts**
 
 - **Every script overwrites only with `--overwrite`.** Steps 3–5 depend on the previous step's outputs, so after
@@ -572,6 +646,8 @@ With the same inputs and seed, a rebuild reproduces these numbers and files exac
      - provide `data_new/<dir>/<prefix>_MGRA15.csv` (`MGRA, TAZ, City, share_in`) and `<prefix>_MGRA15.shp`
        yourself (any `share_in` works, e.g. 1.0), and skip step 1; or
      - give step 1 the old MGRA13 polygons and list.
+   - In step 6, set the area's `exclude` list so that each route and direction keeps one variant (the script
+     stops and names the variants if not).
    - Check `RESCUED_STREETS` and `DROP_NAMES` in step 2. They are specific to these two areas, so look at the
      FC 0/−1 links of your area in QGIS before reusing them.
 3. **Another zone system or network source:** steps 2–5 assume Bike_Net/TNED field names and EPSG:2230. Check the
@@ -587,6 +663,7 @@ build_bikenet_networks.py          step 2
 build_fleetpy_network_mapping.py   step 3
 build_period_travel_times.py       step 4
 build_abm3_demand_files.py         step 5
+build_frt_network.py               step 6
 process_network.py                 network helpers used by step 3 (create_network_from_raw_edges,
                                    write_node_edge_from_pre_node_edge; IS_DEMAND and ONEWAY columns are
                                    optional); other functions there are legacy and contain hard-coded local paths
@@ -596,8 +673,8 @@ generate_demand_files.py           legacy MGRA13/ABM2-era demand pipeline (selec
 rebuild_mgra_road_overlays.py      legacy: rebuilds the MGRA13 QGIS overlay CSVs used by generate_demand_files.py
 build_super_network.py             copy of MTSM's pre_process/build_super_network.py (MTSM 008c6ac, unchanged):
                                    builds an MTSM super-network (walk, FRT, microtransit) from a road network and
-                                   an FRT stop/edge network. Not yet run here; it does not keep walking, virtual
-                                   stops or FRT stops off the freeways (MTSM I-33)
+                                   an FRT stop/edge network (step 6). Test-run only; it does not keep walking,
+                                   virtual stops or FRT stops off the freeways (MTSM I-33)
 CLAUDE.md                          detailed working notes: every decision, check and count behind the pipeline
 ```
 

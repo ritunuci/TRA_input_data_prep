@@ -13,6 +13,7 @@ build_bikenet_networks.py              MGRA15-era LG/DT road networks from Bike_
 build_fleetpy_network_mapping.py       FleetPy nodes/edges + zone -> pickup node mapping from those networks
 build_period_travel_times.py           5-period link times from the ABM3 assignment (TNED hwyload) + FleetPy network folder
 build_abm3_demand_files.py             ABM3 demand files (trip requests with betas) on the MGRA15 networks
+build_frt_network.py                   MTSM FRT inputs (frt_stops/frt_edges/frt_routes) from the gdb transit tables; see "FRT network"
 build_super_network.py                 copy of MTSM pre_process/build_super_network.py (MTSM 008c6ac, unchanged); see "Open items"
 Cupertino_Network_fullnetwork.ipynb    unrelated Cupertino notebook; still points to C:\Users\11643\... and D:\UCI Research\...
 data_current_script/                   copy of the data; its subfolders mirror D:/Ritun/Siwei_Micro_Transit
@@ -42,6 +43,7 @@ $E/python.exe build_bikenet_networks.py            # then:
 $E/python.exe build_fleetpy_network_mapping.py     # then:
 $E/python.exe build_period_travel_times.py         # then:
 $E/python.exe build_abm3_demand_files.py           # all four refuse to overwrite without --overwrite
+$E/python.exe build_frt_network.py                 # after build_fleetpy_network_mapping.py; also needs --overwrite
 ```
 PowerShell:
 ```
@@ -86,21 +88,7 @@ $E="C:\Users\ritun_uci\.conda\envs\shftn_trvlrs"; $env:PATH="$E;$E\Library\mingw
   3. `read_super_network` uses `nx.DiGraph`, so a second link with the same node pair silently overwrites the first.
   4. With stop nodes per route, a route change becomes alight (0 s) + board (headway/2). There is no new fare (`transit_fare` is not set after a waiting link), and `bt_f_trfer` applies if the penalty is on. This changes results against the reference.
   5. 70 lines name Lemon Grove (`"lemon_grove"` / `LG_`).
-- **FRT network decisions (user, 2026-11-23); the builder is not written yet:**
-  - Source: `data_new/network/EMMEOutputs.gdb` (`trrt`, `trlink`, `trstop`, `TransitRoute`). It equals the ABM3 run's transit input (`shaqa_new_result/input`, scenarioYear 2022). `data_new/gtfs_transit_net/` is SANDAG "Transit Routes 2025" (scenario 462): no stops and more frequent headways. It is not used.
-  - Outputs: `build_super_network.py` inputs `frt_stops.csv` (`stop_id,pos_x,pos_y`) and `frt_edges.csv` (`from_stop,to_stop,distance,travel_time,route`; directed rows).
-  - One stop node per TNED stop node × route × direction. Proposed `stop_id` = (route × 10 + dir) × 100,000 + TNED node.
-  - `route` = route number (both directions). MTSM's cost code treats it as a line run both ways (× 2).
-  - Run time = distance along the route ÷ 30 mph, rail included (not `RUNTIME`).
-  - One headway for all routes.
-  - One variant per route and direction:
-    - Downtown keeps `510108/208`, `20102/202`, `120116/216` and drops the peak-only 110, 280, 290.
-    - 398, 598 and 994 drop out by themselves (one stop inside).
-    - LG has nothing to choose: 4, 520, 856, 916, 917, 936; 851 has no stop inside.
-  - Links: both stops inside the area.
-  - Stops joined to our street nodes only (`node_kind` street, split allowed). `pos_x/pos_y` = that node's coordinates.
-  - Optional `frt_routes.csv` (route, dir, mode, stops, length) for MTSM's line cost.
-- **`build_super_network.py`** (root) was placed here by the user on 2026-11-23. It is a byte-identical copy of MTSM `pre_process/build_super_network.py` at `008c6ac`; the file was last changed in MTSM at b38d7ba. It does not yet apply the freeway rule (I-33).
+- **`build_super_network.py`** (root) was placed here by the user on 2026-11-23. It is a byte-identical copy of MTSM `pre_process/build_super_network.py` at `008c6ac`; the file was last changed in MTSM at b38d7ba. It does not yet apply the freeway rule (I-33). It was test-run (scratchpad output only) on the FRT build; see "FRT network".
 
 ## Known issues (not fixed; tell the user before changing them)
 
@@ -521,6 +509,46 @@ Bike_Net has no freeways or ramps. The user wants them in the network, taken fro
   | FC 4–7 | 1,072 / 206 | 730 / 291 |
 
   TNED FC 2–7 gives LG 122 zones and DT 329 zones. TNED's DT count is higher because its streets are split mid-block where TAZ connectors attach.
+
+## FRT network (decisions 2026-11-23; built 2026-11-23 with `build_frt_network.py`, about 5 s)
+
+### Decisions (user, 2026-11-23)
+
+- **Source:** `data_new/network/EMMEOutputs.gdb` (`trrt`, `TransitRoute`, `trstop`; stop coordinates from `TNED_HwyNodes`/`TNED_RailNodes`). It equals the ABM3 run's transit input (`E:/sanmith/abm_runs/shaqa_new_result/input/{trrt,trlink,trstop}.csv` and its gdb, numeric compare; scenarioYear 2022). `data_new/gtfs_transit_net/` is SANDAG "Transit Routes 2025" (scenario 462): no stops and more frequent headways. Not used.
+- **Outputs** = `build_super_network.py` inputs: `frt_stops.csv` (`stop_id,pos_x,pos_y`) and `frt_edges.csv` (`from_stop,to_stop,distance,travel_time,route`; directed rows), plus `frt_routes.csv` (reference: ABM3 headways, fare, length for MTSM's line cost).
+- **Stop nodes:** one per TNED stop node × route × direction; `stop_id` = (route × 10 + dir) × 100,000 + TNED node.
+- **`route`** = route number (both directions). MTSM's cost code treats it as a line run both ways (× 2).
+- **Run time** = distance along the route ÷ 30 mph, rail included (not TNED `RUNTIME`). One headway for all routes (set in `build_super_network.py`).
+- **One variant per route and direction:** Downtown keeps `510108/208`, `20102/202`, `120116/216` and drops `510119/219`, `20114/214`, `120112/212` and the peak-only 110, 280, 290 (`AREAS["downtown_sd"]["exclude"]`). LG excludes nothing.
+- **Inside rule: a stop's TNED node within 50 ft of the MGRA15 union** (user, 2026-11-23; strict point-in-polygon would drop stops on boundary streets, e.g. route 4 at Jamacha Rd/Beacon). Links only between consecutive stops of a variant with both stops inside (a variant that leaves and comes back gets no link across the gap).
+- **Routes 851 (LG) and 994 (DT) come back** with the 50 ft tolerance (user). Under strict point-in-polygon 851 had no stop inside and 994 one.
+- **Join:** to the nearest street node of ours (`node_kind` street, split allowed, never freeway; tie → smaller node). `pos_x/pos_y` = that street node's coordinates, so MTSM's `nearest_walk_nodes` (which considers every node in `nodes.csv`, freeway nodes too, until I-33) picks exactly that node at 0 ft. Checked: with the true TNED locations no stop's nearest node is a freeway node either, so this is a safeguard. **All stops kept** (user); joins over 300 ft are listed.
+
+### Step-0 facts (read-only, 2026-11-23)
+
+- In `trstop`, `Stop_ID` is contiguous per variant and its order = `Milepost` order (strictly increasing, no zero steps); first milepost 0; last milepost = `TransitRoute.SHAPE_Length` / 5,280 exactly. So link distance = milepost difference.
+- 76 variants visit a TNED node twice (loops, `Pass_Count` 2, e.g. 4105/4205 at Euclid); never on consecutive stops.
+- Every stop node has TNED coordinates; trstop lon/lat vs TNED coordinates median 0.2 ft, max 0.9 ft.
+
+### Build (2026-11-23), outputs in `outputs_MGRA15/<area>/frt/`
+
+`frt_stops.csv`, `frt_edges.csv`, `frt_routes.csv`, `frt_stops.shp` (TNED locations), `frt_links.shp` (route line cut at the mileposts; all links got the route geometry). Column lists in the script docstring and README step 6.
+
+| | LG | DT |
+|---|---|---|
+| TNED stop nodes in the area (of them ≤ 50 ft outside the zones) | 45 (7) | 115 (9); 112 used (398/598 have stops but no link) |
+| routes | 7: 4, 520, 851, 856, 916, 917, 936 | 21: 2, 3, 4, 5, 7, 11, 12, 20, 83, 120, 215, 225, 235, 510, 520, 530, 901, 923, 929, 992, 994 |
+| variants / stop nodes / links | 12 / 122 / 110 | 41 / 354 / 326 |
+| street nodes with a stop | 45 | 109 (3 street nodes take two TNED stop nodes each) |
+| link length sum | 28.46 mi | 58.07 mi |
+| link m min / median / max | 86 / 322 / 2,401 | 62 / 224 / 1,594 |
+| join ft median / p90 / max | 0 / 146 / 303 (Spring Vista/Sweetwater, one of the 851 stops near the dropped Sweetwater Rd piece) | 0 / 127 / 635 (County Admin Bldg, N Harbor Dr, 923/992) |
+| repeated (from, to) pairs dropped | 0 | 0 |
+
+- One-direction variants: LG 916 and 917 (dir 1 only), DT 992 (dir 1, a loop: 14 stop nodes, 26 links).
+- Route ÷ straight-line distance: median 1.00; max LG 1.55 (936), DT 3.71 (923205 around a block), 3.07 (11118).
+- 994 has fare $0 in trrt; all others $2.50.
+- **MTSM test** (our copy of `build_super_network.py`, `--variant non_micro --headway 10`, output in the scratchpad only): both areas read fine; LG 122 stops, 45 walk nodes with a stop, links walk 2,601 / FRT 110 / FRT wait 244; DT 354 stops, 109 walk nodes, 2,255 / 326 / 708; largest stop → walk node distance 0.0. Walk links still include freeway edges (I-33).
 
 ## Working with this user
 
