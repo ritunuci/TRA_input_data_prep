@@ -51,14 +51,28 @@ Outputs, in <out-root>/<area>/:
       freeway edges), tned_ids
   network/<prefix>_roads_period_tt.shp  the links with LINK_KIND, the AB/BA period times (BA empty on one-way
       links) and the source (QGIS)
-  fleetpy_network/                     a FleetPy network folder:
-      base/nodes.csv, base/edges.csv (copies; edges travel_time = free flow), base/crs.info (EPSG:2230)
+  fleetpy_network/                     a FleetPy network folder for the microtransit vehicles, WITHOUT the freeway,
+      freeway-connector and ramp edges (user, 2026-11-23: those are for cars only; microtransit drives on street,
+      alley and driveway edges). All nodes are kept, so the node numbers stay those of nodes.csv; the freeway nodes
+      have no edge. --fleetpy-freeways keeps every edge (the version before 2026-11-23; backup in
+      outputs_MGRA15/<area>/backup_fleetpy_with_freeways/).
+      base/nodes.csv (copy), base/edges.csv (edges.csv without freeway edges; travel_time = free flow),
+      base/crs.info (EPSG:2230)
       <t>/edges_td_att.csv (from_node, to_node, edge_tt) for t = 0 (EV), 10800 (EA, 3:00), 21600 (AM, 6:00),
       32400 (MD, 9:00), 55800 (PM, 15:30), 68400 (EV, 19:00). FleetPy's NetworkBasic loads a folder when
       update_network(sim_time) is called with exactly that time; before that it uses base/edges.csv.
       0/ holds the EV times because ABM3's EV period runs 19:00-3:00, so 0:00-3:00 is still EV.
       network_dynamics.csv (simulation_time, travel_time_folder) lists the six folders, for the scenario
       parameter nw_dynamic_f,network_dynamics.csv (without it FleetPy scans the integer-named folders itself).
+  fleetpy_initial_vehicle_distribution/imbalanced.csv   node_index,probability: FleetPy's initial vehicle
+      distribution (scenario parameter op_init_veh_distribution,imbalanced.csv; MTSM copies it to FleetPy's
+      data/fleetctrl/initial_vehicle_distribution/<network name>/). INIT_VEH_N start nodes, 1/INIT_VEH_N each, spread
+      over the area (user, 2026-11-23): the pickup nodes inside the zones are grouped into INIT_VEH_N clusters
+      (k-means on their coordinates, seed INIT_VEH_SEED), and each cluster's start node is the pickup node nearest
+      its centre. Never a freeway node (checked): FleetPy places each vehicle on one of these nodes at random, and
+      a vehicle on a freeway node could not move (fleetpy_network/ has no freeway edges). Without such a file
+      FleetPy spreads the vehicles over all nodes. The old Lemon Grove file (nodes 256, 400, 600, 650, 700) was
+      FleetPy's example file, not chosen for Lemon Grove.
 
 Usage (from the repo folder; see CLAUDE.md "Running" for the env + PATH setup):
     python build_period_travel_times.py
@@ -214,7 +228,42 @@ def match_links(links, tned):
     return pd.DataFrame(out, index=links.index)
 
 
-def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat):
+CAR_ONLY_KINDS = ("freeway", "fwy_connector", "ramp")  # link_kind values left out of fleetpy_network/
+INIT_VEH_N = 5  # start nodes in imbalanced.csv
+INIT_VEH_SEED = 42
+INIT_VEH_DIR, INIT_VEH_FILE = "fleetpy_initial_vehicle_distribution", "imbalanced.csv"
+
+
+def initial_vehicle_nodes(nodes_f, prefix_path, k=INIT_VEH_N, seed=INIT_VEH_SEED, iterations=200):
+    """k start nodes spread over the area: k-means on the pickup nodes inside the zones (street nodes with
+    IS_DEMAND = 1 and an MGRA), then the pickup node nearest each cluster centre. Returns the FleetPy node IDs."""
+    nodes = pd.read_csv(nodes_f)
+    kind = pd.read_csv(prefix_path + "_node_kind.csv")
+    raw = pd.read_csv(prefix_path + "_raw_nodes.csv")
+    n = nodes.merge(kind[["node", "kind", "raw_node"]], left_on="node_index", right_on="node", validate="1:1")
+    n = n.merge(raw[["NODE", "IS_DEMAND", "MGRA"]], left_on="raw_node", right_on="NODE", how="left", validate="1:1")
+    cand = n[(n.kind == "street") & (n.IS_DEMAND == 1) & n.MGRA.notna() & (n.MGRA > 0)].reset_index(drop=True)
+    if len(cand) < k:
+        sys.exit("ERROR: fewer pickup nodes inside the zones than initial vehicle nodes")
+    X = cand[["pos_x", "pos_y"]].to_numpy()
+    rng = np.random.default_rng(seed)
+    c = X[rng.choice(len(X), k, replace=False, p=np.full(len(X), 1 / len(X)))]  # uniform start centres
+    for _ in range(iterations):
+        lab = ((X[:, None, :] - c[None]) ** 2).sum(-1).argmin(1)
+        nc = np.array([X[lab == j].mean(axis=0) if (lab == j).any() else c[j] for j in range(k)])
+        if np.allclose(nc, c):
+            break
+        c = nc
+    tree = shapely.STRtree(shapely.points(X[:, 0], X[:, 1]))
+    idx = tree.query_nearest(shapely.points(c[:, 0], c[:, 1]), all_matches=False)[1]
+    chosen = cand.iloc[idx]
+    if chosen.node_index.duplicated().any() or not (chosen.kind == "street").all():
+        sys.exit("ERROR: initial vehicle nodes are not distinct street nodes")
+    shares = np.bincount(lab, minlength=k) / len(X)
+    return chosen.node_index.tolist(), shares
+
+
+def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat, fleetpy_freeways=False):
     net_dir = os.path.join(out_root, name, "network")
     fp_dir = os.path.join(out_root, name, "fleetpy_network")
     pfx = os.path.join(net_dir, cfg["prefix"])
@@ -224,7 +273,8 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat):
         if not os.path.exists(p):
             sys.exit(f"ERROR: {p} not found (run build_bikenet_networks.py and build_fleetpy_network_mapping.py first).")
     tt_out, shp_out = pfx + "_link_period_tt.csv", pfx + "_roads_period_tt.shp"
-    for p in (tt_out, shp_out, fp_dir):
+    iv_dir = os.path.join(out_root, name, INIT_VEH_DIR)
+    for p in (tt_out, shp_out, fp_dir, iv_dir):
         if os.path.exists(p) and not overwrite:
             sys.exit(f"ERROR: {p} exists. Use --overwrite.")
 
@@ -424,23 +474,42 @@ def build_area(name, cfg, out_root, hwyload_dir, overwrite, rule, stat):
     shp["match_share"] = shp["match_share"].round(3)
     shp = shp.rename(columns={"match_share": "share"})  # shapefile field names: max 10 characters
     gpd.GeoDataFrame(shp, geometry="geometry", crs=links.crs).to_file(shp_out)
+    # FleetPy network: microtransit only, so without the car-only edges (unless --fleetpy-freeways)
+    kind_f = pfx + "_edge_kind.csv"
+    if not os.path.exists(kind_f):
+        sys.exit(f"ERROR: {kind_f} not found (run build_fleetpy_network_mapping.py first).")
+    kind = pd.read_csv(kind_f)
+    if not (kind[["from_node", "to_node"]].to_numpy() == out[["from_node", "to_node"]].to_numpy()).all():
+        sys.exit("ERROR: edge_kind.csv is not in edges.csv order.")
+    keep = np.ones(len(out), bool) if fleetpy_freeways else ~kind.link_kind.isin(CAR_ONLY_KINDS).to_numpy()
+    edges_raw = pd.read_csv(edges_f, dtype=str, keep_default_na=False)  # write the kept rows unchanged (as text)
     if os.path.exists(fp_dir):
         shutil.rmtree(fp_dir)
     os.makedirs(os.path.join(fp_dir, "base"))
     shutil.copyfile(nodes_f, os.path.join(fp_dir, "base", "nodes.csv"))
-    shutil.copyfile(edges_f, os.path.join(fp_dir, "base", "edges.csv"))
+    edges_raw[keep].to_csv(os.path.join(fp_dir, "base", "edges.csv"), index=False)
     with open(os.path.join(fp_dir, "base", "crs.info"), "w") as f:
         f.write(CRS_INFO)
     for t_sim, p in FLEETPY_FOLDERS.items():
         d = os.path.join(fp_dir, str(t_sim))
         os.makedirs(d)
-        out[["from_node", "to_node", f"tt_{p}"]].rename(columns={f"tt_{p}": "edge_tt"}).to_csv(
+        out.loc[keep, ["from_node", "to_node", f"tt_{p}"]].rename(columns={f"tt_{p}": "edge_tt"}).to_csv(
             os.path.join(d, "edges_td_att.csv"), index=False)
+    print(f"  fleetpy_network: {int(keep.sum())} of {len(out)} edges"
+          + (" (all, --fleetpy-freeways)" if fleetpy_freeways else
+             f" (without {int((~keep).sum())} freeway/connector/ramp edges; all {len(pd.read_csv(nodes_f))} nodes kept)"))
     # scenario config nw_dynamic_f,network_dynamics.csv -> NetworkBasic loads the folder of each row at that time
     pd.DataFrame({"simulation_time": list(FLEETPY_FOLDERS), "travel_time_folder": [str(t) for t in FLEETPY_FOLDERS]}
                  ).to_csv(os.path.join(fp_dir, "network_dynamics.csv"), index=False)
     print(f"  wrote {tt_out}\n  wrote {shp_out}\n  wrote {fp_dir}\\ (base + folders {list(FLEETPY_FOLDERS)} "
           f"+ network_dynamics.csv)")
+    # FleetPy initial vehicle distribution: INIT_VEH_N start nodes spread over the area
+    iv_nodes, iv_shares = initial_vehicle_nodes(nodes_f, pfx)
+    os.makedirs(iv_dir, exist_ok=True)
+    pd.DataFrame({"node_index": iv_nodes, "probability": [1 / len(iv_nodes)] * len(iv_nodes)}).to_csv(
+        os.path.join(iv_dir, INIT_VEH_FILE), index=False)
+    print(f"  wrote {os.path.join(iv_dir, INIT_VEH_FILE)}: start nodes {iv_nodes} "
+          f"(cluster shares of the pickup nodes {[round(float(s), 2) for s in iv_shares]})")
 
 
 def main():
@@ -453,10 +522,13 @@ def main():
                     help="override the area's rule for unmatched links (default: AREAS[...]['unmatched_rule'])")
     ap.add_argument("--class-stat", choices=["mean", "median"],
                     help="override the area's class statistic (default: AREAS[...]['class_stat'])")
+    ap.add_argument("--fleetpy-freeways", action="store_true",
+                    help="keep the freeway, connector and ramp edges in fleetpy_network/ (before 2026-11-23)")
     args = ap.parse_args()
     for name in args.areas:
         build_area(name, AREAS[name], args.out_root, args.hwyload_dir, args.overwrite,
-                   args.unmatched_rule or AREAS[name]["unmatched_rule"], args.class_stat or AREAS[name]["class_stat"])
+                   args.unmatched_rule or AREAS[name]["unmatched_rule"], args.class_stat or AREAS[name]["class_stat"],
+                   args.fleetpy_freeways)
 
 
 if __name__ == "__main__":

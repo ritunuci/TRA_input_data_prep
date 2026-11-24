@@ -14,7 +14,8 @@ build_fleetpy_network_mapping.py       FleetPy nodes/edges + zone -> pickup node
 build_period_travel_times.py           5-period link times from the ABM3 assignment (TNED hwyload) + FleetPy network folder
 build_abm3_demand_files.py             ABM3 demand files (trip requests with betas) on the MGRA15 networks
 build_frt_network.py                   MTSM FRT inputs (frt_stops/frt_edges/frt_routes) from the gdb transit tables; see "FRT network"
-build_super_network.py                 copy of MTSM pre_process/build_super_network.py (MTSM 008c6ac, unchanged); see "Open items"
+build_super_network.py                 MTSM pre_process/build_super_network.py (008c6ac) + --local-edges (2026-11-23; car-only freeways); to copy back to MTSM
+build_period_super_networks.py         MTSM super-networks per ABM3 period (full grid) + car networks; see "Super-networks"
 Cupertino_Network_fullnetwork.ipynb    unrelated Cupertino notebook; still points to C:\Users\11643\... and D:\UCI Research\...
 data_current_script/                   copy of the data; its subfolders mirror D:/Ritun/Siwei_Micro_Transit
 data_new/                              new data added by the user (ABM3 demand, MGRA15 layer, DT/LG GIS); see "data_new/"
@@ -44,6 +45,7 @@ $E/python.exe build_fleetpy_network_mapping.py     # then:
 $E/python.exe build_period_travel_times.py         # then:
 $E/python.exe build_abm3_demand_files.py           # all four refuse to overwrite without --overwrite
 $E/python.exe build_frt_network.py                 # after build_fleetpy_network_mapping.py; also needs --overwrite
+$E/python.exe build_period_super_networks.py       # after steps 4 and 6; also needs --overwrite
 ```
 PowerShell:
 ```
@@ -81,14 +83,16 @@ $E="C:\Users\ritun_uci\.conda\envs\shftn_trvlrs"; $env:PATH="$E;$E\Library\mingw
 
 ## Open items
 
-- **MTSM must keep walking and stops off the freeways** (opened 2026-11-20, user asked to keep it open). Since commit eed31f6 the LG/DT networks contain TNED freeways, connectors and ramps (one-way edges). MTSM's `pre_process/build_super_network.py` (checked at b38d7ba) puts a walk link on every road edge, draws virtual stops from all road nodes, joins FRT stops to the nearest road node, and assumes two edges per road segment. Before MTSM uses the new networks, its builder must use `outputs_MGRA15/<area>/network/<prefix>_edge_kind.csv` (`link_kind` street/alley/driveway = walkable; freeway/fwy_connector/ramp = car only) and `<prefix>_node_kind.csv` (`kind` street/freeway) for walk links, virtual stops and stop joining. The car network (`auto_edges.csv`) and microtransit driving can use every edge. Not started; the MTSM work and tests wait for the user ("we will do it later"). Details: "Freeways and ramps from TNED", MTSM consequence; README section 6. (MTSM tracks this as its I-33 in `docs/open_issues.md`.)
+- **MTSM must keep walking and stops off the freeways** (opened 2026-11-20; MTSM I-33). **Decided and done here 2026-11-23, waiting for MTSM:** freeways, connectors and ramps are car only; walking AND microtransit use only street/alley/driveway edges (the user changed the earlier "microtransit can use every edge"); virtual stops from all street nodes; FRT stops joined to street nodes. Implemented as option (b): our `build_super_network.py` got `--local-edges` (see "Super-networks"); it is to be copied back into MTSM `pre_process/`, which closes I-33 there. `fleetpy_network/` was rebuilt without freeway edges. The MTSM-side docs update was handed to the user as a prompt for Claude Code in MTSM (I-33 → In progress, new period-network issue, I-34 additions). MTSM code changes and tests wait for the user.
+- **MTSM must use one super-network per period** (opened 2026-11-23; the user will add it in MTSM as a new issue, probably I-35, from the prompt written in this session). Checked at MTSM `a912056`: 4 MTSM periods (AM to 10:00, MD to 15:00, PM to 20:00, EV; `config.AM_END` etc., `time_periods` hard-coded in `scenarios.py`, `update_network_files.py`) vs ABM3's 5; initial networks keyed by variant/headway/share only (`testing_scenario_creation.scen_create`, `paths.networks_for_traveler`, the FRT-only network `non_micro` at `BASE_FRT_HEADWAY` for every period); one `auto_edges.csv` (`scenarios.py:108`); `update_network_files` writes per-period finals from one initial network (type 5 = FleetPy wait, type 4 × detour ratio); `update_initial_network.py` (headway rewrite) LG only. Still open: the file names (proposed: MTSM names + `_<period>`) and whether MTSM switches to the 5 ABM3 periods or maps them.
+- **FleetPy initial vehicle positions** (found and solved here 2026-11-23; MTSM must stage the new file): without an initial state or `op_init_veh_distribution`, FleetPy (`FleetSimulationBase.load_initial_state`) spreads vehicles uniformly over all nodes (or the must-stop nodes, if any); a vehicle on a freeway node (no edge in `fleetpy_network/`) never moves. Do not mark freeway nodes `is_stop_only`: FleetPy would then place every vehicle on them. MTSM's `imbalanced.csv` (256, 400, 600, 650, 700 × 0.2) is byte-identical to FleetPy's `example_network/imbalanced.csv` (also in `FleetPy_SanDiego`): copied, never chosen for LG. Those old positions coincide exactly (0 ft) with new LG nodes 288, 427, 638, 687, 737 (option A, not chosen). **User's choice (B), same name `imbalanced.csv`:** step 4 writes `outputs_MGRA15/<area>/fleetpy_initial_vehicle_distribution/imbalanced.csv`, 5 start nodes × 0.2 = the pickup node inside the zones nearest each of 5 k-means centres (seed 42, unweighted) of those pickup nodes: LG 694, 225, 863, 498, 189 (cluster shares 0.23/0.24/0.18/0.19/0.16), DT 480, 206, 591, 292, 52 (0.20/0.21/0.22/0.23/0.13). Rejected: (C) demand-weighted (LG 841, 207, 694, 463, 145; DT 524, 284, 513, 374, 157). Expected effect small: vehicles are placed at random among the 5 (a small fleet may leave some empty), requests start at 3:00, and MTSM's FleetPy config repositions idle vehicles. Step 4 rerun 2026-11-23: `fleetpy_network/` and the period files unchanged (byte compare; `.dbf` not compared).
 - **MTSM must work for any study area and for the new FRT network** (opened 2026-11-23; the user adds it to MTSM's `docs/open_issues.md` as **I-34**, text written in this session; the user will generalize MTSM). Checked at MTSM `008c6ac`:
   1. FRT line length, duration, cost, VMT and ridership output (`output_performance_metrics.py`) are Lemon Grove only. A Downtown run crashes at `scenarios.py:90` (`UnboundLocalError`). The line length = sum of *unique distance values* per route, which works only because the old network had identical distances in both directions.
   2. The FRT fare and microtransit start fare are charged only when `study_area == "lemon_grove"` (`network_algorithms.py:352, :372`). Other areas pay $0.
   3. `read_super_network` uses `nx.DiGraph`, so a second link with the same node pair silently overwrites the first.
   4. With stop nodes per route, a route change becomes alight (0 s) + board (headway/2). There is no new fare (`transit_fare` is not set after a waiting link), and `bt_f_trfer` applies if the penalty is on. This changes results against the reference.
   5. 70 lines name Lemon Grove (`"lemon_grove"` / `LG_`).
-- **`build_super_network.py`** (root) was placed here by the user on 2026-11-23. It is a byte-identical copy of MTSM `pre_process/build_super_network.py` at `008c6ac`; the file was last changed in MTSM at b38d7ba. It does not yet apply the freeway rule (I-33). It was test-run (scratchpad output only) on the FRT build; see "FRT network".
+- **`build_super_network.py`** (root) was placed here by the user on 2026-11-23 as a byte-identical copy of MTSM `pre_process/build_super_network.py` at `008c6ac` (last changed in MTSM at b38d7ba). Changed here on 2026-11-23: `--local-edges` (see "Super-networks"). Without the option it writes the same files as the 008c6ac version (checked: 12 of 12 files byte-identical, LG and DT, micro/non_micro/micro_only + auto). Copy it back into MTSM when the user says so.
 
 ## Known issues (not fixed; tell the user before changing them)
 
@@ -560,6 +564,42 @@ Bike_Net has no freeways or ramps. The user wants them in the network, taken fro
 
   No effect on trips inside the area: there is no stop on these pieces, and no route loses a connection between two inside stops (in every LG variant, links = stops − 1). Rejected alternatives: add the next outside stop (Encanto would join a street node ~0.8 mi away) or a boundary stop where the line leaves the area (a stop where no station exists). DT not checked the same way.
 - **MTSM test** (our copy of `build_super_network.py`, `--variant non_micro --headway 10`, output in the scratchpad only): both areas read fine; LG 122 stops, 45 walk nodes with a stop, links walk 2,601 / FRT 110 / FRT wait 244; DT 354 stops, 109 walk nodes, 2,255 / 326 / 708; largest stop → walk node distance 0.0. Walk links still include freeway edges (I-33).
+
+## Super-networks (decisions and build 2026-11-23, `build_period_super_networks.py`, about 40 s)
+
+### How MTSM's super-network is built (`build_super_network.py`)
+
+Three layers on one numbering: walk nodes 0..N−1 (= road nodes, FleetPy IDs); FRT stops N..N+S−1 (stops with an FRT link, in `stop_id` order); microtransit nodes offset + i (offset = N + S). Link types: 0 walk (road edge, distance ÷ walk speed), 1 FRT, 2 FRT board (headway ÷ 2) / alight (0 s) at the stop's nearest walk node, 4 microtransit (road edge, car time × 1.4), 5 microtransit board (180 s) / alight (0 s) at virtual stops, 7 car (`auto_edges`, every road edge). MTSM reads the travel time of each link once; after each FleetPy run it rewrites type 5 (FleetPy's mean wait per period, `aggregation,whole_region`) and scales type 4 by FleetPy's detour ratio, per MTSM period. There is no separate walk network file: the walk layer is built from the road edges.
+
+### Decisions (user, 2026-11-23)
+
+- **Car only: freeways, freeway connectors, ramps.** Walking AND microtransit use only street/alley/driveway edges (`<prefix>_edge_kind.csv`), all two-way. `fleetpy_network/` (FleetPy simulates the microtransit vehicles) is rebuilt without the freeway edges, all nodes kept. Freeways remain only in MTSM's car network.
+- **Option (b):** the builder itself handles it (`--local-edges FILE`, `from_node,to_node`): walk (0) and microtransit (4) links only on local edges, in road-edge order; virtual stops drawn only from nodes on local edges (a virtual-stop file naming another node stops the run); FRT stops joined to the nearest node on a local edge; car links on every edge; freeway nodes keep their numbers but get no link in the walk/microtransit layers. Without the option: unchanged (checked byte for byte). To be copied back into MTSM.
+- **Virtual stops: all street nodes (option ii)** (LG 1,047, DT 730). The old construction (`standalone_scripts/pre_process/process_network_trial_edit.py`, `construct_vitual_stops`) drew from all road nodes, not demand nodes: frozen LG 75 % = 815 of 1,099 nodes, 593 of them demand nodes; 70 % of request ends at a virtual stop. Street nodes: LG 627 intersections, 92 mid-block (same street both sides), 51 bends/name changes, 270 dead ends, 7 ramp ends; DT 466 / 101 / 42 / 91 / 30. Mid-block nodes are fine as curbside pickups (user kept (ii) as is, including alley/driveway dead ends LG 12, DT 15). Pickup nodes (demand) = street nodes minus alley/driveway-only, split and FC 3-only nodes (LG 15, DT 21 fewer).
+- **One super-network per ABM3 period** (EA, AM, MD, PM, EV); only types 4 and 7 change (period car time `tt_<P>`).
+- **Full grid**: micro 5 headways (10/15/20/30/60) × 3 shares (50/75/100), non_micro 5, micro_only 3, + auto_edges = 24 per period, 120 per area.
+- **Seed 42** for the virtual stops (same stops in every period and headway; smaller share ⊂ larger). **Walk speed 1.6 m/s** (builder default 1.251; old code 1.6 in walk links, frozen initial networks 1.251). Microtransit factor 1.4 and wait 180 s (defaults).
+- **Census tracts not needed:** MTSM uses `aggregation,whole_region`; its code still reads `pre_nodes.csv` `census_tract`/`node_in_fleetpy` (LG folder only) and looks up a tract per type-5 link, and our `pre_nodes.csv` already has `census_tract` = 0 for every node. In MTSM's `micro` branch the type-5 update runs only for `study_area == "lemon_grove"` (I-34).
+- **No pedestrian-only links** (Bike_Net paths, ped bridges, Embarcadero/MLK paths, platform connections): walking is on streets only (user: fine).
+- Output folder `outputs_MGRA15/<area>/super_network/`; file names = MTSM's + `_<period>` (proposed to MTSM, not agreed yet).
+
+### Build (2026-11-23)
+
+- **Backup first:** `outputs_MGRA15/<area>/backup_fleetpy_with_freeways/` (`fleetpy_network/` and the step-4 period CSV/shapefile; md5 verified). `build_period_travel_times.py` now writes `fleetpy_network/` without freeway edges (`CAR_ONLY_KINDS`; `--fleetpy-freeways` keeps them). Rerun 2026-11-23 (the first two tries failed because QGIS held `Lemon_grove_roads_period_tt.shp`; nothing had changed): `link_period_tt.csv`, `.shp/.shx/.prj` byte-identical, `.dbf` differs only in the header date; `fleetpy_network/` = backup minus exactly the freeway rows (LG 27, DT 101), nodes/crs/network_dynamics identical; `--fleetpy-freeways` into a scratch out-root reproduces the backup byte for byte.
+- **Grid** (`build_period_super_networks.py`, checks all passed; independent check of the AM/PM files: no non-FRT link touches a freeway node, walk = distance ÷ 1.6, type 4 = `tt_AM` × 1.4, FRT boarding 600 s at hw 20, auto = `tt_PM` on every edge):
+
+| | LG | DT |
+|---|---|---|
+| road edges: local / car only | 2,574 / 27 | 2,154 / 101 |
+| nodes: street / freeway | 1,047 / 20 | 730 / 70 |
+| num_walk_nodes / FRT stops / microtransit_node_offset | 1,067 / 122 / 1,189 | 800 / 354 / 1,154 |
+| virtual stops 50 / 75 / 100 % | 507 / 781 / 1,047 | 362 / 548 / 730 |
+| request ends at a virtual stop 50 / 75 / 100 % | 51.7 / 75.1 / 100 % | 46.2 / 71.5 / 100 % |
+| links micro hw 10 / 75 %: type 0 / 1 / 2 / 4 / 5 | 2,574 / 110 / 244 / 2,574 / 1,562 | 2,154 / 326 / 708 / 2,154 / 1,096 |
+| files / size | 120 + info (32 MB) | 120 + info (28 MB) |
+
+- `super_network_info.csv` holds `num_walk_nodes`, `microtransit_node_offset`, `last_walk_node`, `first/last_frt_stop`, `last_microtransit_node` and the settings, for MTSM's constant configuration.
+- Not tested in MTSM (waits for the user and the MTSM period/area changes).
 
 ## Working with this user
 

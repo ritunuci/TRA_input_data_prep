@@ -42,16 +42,20 @@ run the pipeline, put your own copies of the raw files in the folders listed bel
  EMMEOutputs.gdb (trrt, TransitRoute, trstop, TNED_HwyNodes, TNED_RailNodes) + network/ from step 3
                       ▼
  [6] build_frt_network.py            → frt/frt_stops.csv, frt_edges.csv, frt_routes.csv, frt_stops.shp, frt_links.shp
+                      │
+ network/ (steps 3, 4) + frt/ (step 6), through build_super_network.py
+                      ▼
+ [7] build_period_super_networks.py  → super_network/ (MTSM super-networks and car networks, one set per period)
 ```
 
-Each step reads the outputs of the step before it, so run them in this order. Step 6 needs only steps 1–3. Every
-script:
+Each step reads the outputs of the step before it, so run them in this order. Step 6 needs only steps 1–3; step 7
+needs steps 3, 4 and 6. Every script:
 
 - builds **both areas** by default (`--areas lemon_grove downtown_sd`);
 - **refuses to overwrite** existing outputs unless you pass `--overwrite`;
 - stops with an `ERROR:` message when an input check fails.
 
-Steps 2–6 accept `--out-root` (default `outputs_MGRA15/`).
+Steps 2–7 accept `--out-root` (default `outputs_MGRA15/`).
 
 ---
 
@@ -326,11 +330,15 @@ so they hold no period information either. The only period information is in ABM
   `match_share` (empty for freeway edges), `tned_ids`.
 - `network/<prefix>_roads_period_tt.shp`: AB/BA period times per link, with `LINK_KIND`, for QGIS (`BA_*` empty
   on one-way links).
-- `fleetpy_network/`: a ready FleetPy network folder:
+- `fleetpy_network/`: a ready FleetPy network folder for the **microtransit vehicles**. It has **no freeway,
+  freeway-connector or ramp edges** (user, 2026-11-23: those are for cars only). All nodes are kept, so the node
+  numbers are those of `nodes.csv`; the freeway nodes have no edge. `--fleetpy-freeways` keeps every edge (the
+  version before 2026-11-23).
 
 ```
 fleetpy_network/
-  base/nodes.csv, base/edges.csv      (edges travel_time = free flow)
+  base/nodes.csv                      (copy of nodes.csv)
+  base/edges.csv                      (edges.csv without the freeway edges; travel_time = free flow)
   base/crs.info                       EPSG:2230
   0/edges_td_att.csv                  EV  (0:00–3:00 is still ABM3's EV period)
   10800/edges_td_att.csv              EA  (3:00)
@@ -340,6 +348,13 @@ fleetpy_network/
   68400/edges_td_att.csv              EV  (19:00)
   network_dynamics.csv                simulation_time,travel_time_folder (one row per folder)
 ```
+
+- `fleetpy_initial_vehicle_distribution/imbalanced.csv`: FleetPy's initial vehicle distribution
+  (`node_index,probability`; scenario parameter `op_init_veh_distribution,imbalanced.csv`). Five start nodes,
+  probability 0.2 each, spread over the area (user, 2026-11-23): the pickup nodes inside the zones are grouped into
+  5 clusters (k-means on their coordinates, seed 42), and each start node is the pickup node nearest a cluster
+  centre. Lemon Grove 694, 225, 863, 498, 189; Downtown 480, 206, 591, 292, 52. FleetPy puts each vehicle on one of
+  them at random. None is a freeway node (checked), so no vehicle starts where it cannot move.
 
 `edges_td_att.csv` has the columns `from_node, to_node, edge_tt` (s). `base/edges.csv` keeps free flow, because
 MTSM reads it as the free-flow time.
@@ -437,6 +452,58 @@ Writes the fixed-route transit (FRT) inputs of MTSM's `build_super_network.py` f
 TNED coordinates; the excluded variants exist; one variant per route and direction; every edge stop is in the
 stop file; no duplicate (from, to); distance > 0; `stop_id` unique and < 2³¹; every stop joined to a street node.
 
+### Step 7: MTSM super-networks per period (`build_period_super_networks.py`)
+
+Builds MTSM's super-networks with `build_super_network.py` (the copy of MTSM's builder, extended with
+`--local-edges`; see section 9). One set per ABM3 period: EA 3:00–6:00, AM 6:00–9:00, MD 9:00–15:30,
+PM 15:30–19:00, EV 19:00–3:00.
+
+**How a super-network is built** (`build_super_network.py`): three layers on one numbering.
+
+| Layer | Nodes | Links |
+|---|---|---|
+| walk | road nodes 0..N−1 (`nodes.csv`) | type 0 walk, every local edge, time = distance ÷ walk speed |
+| FRT | stops N..N+S−1 (stops with an FRT link, in `stop_id` order) | type 1 FRT (`frt_edges.csv`); type 2 board (half the headway) / alight (0 s) at the stop's walk node |
+| microtransit | a copy of the road nodes, offset + i | type 4 every local edge, time = car time × 1.4; type 5 board (180 s) / alight (0 s) at virtual stops |
+
+The car network (`auto_edges`, type 7) is every road edge at car time.
+
+**Rules (user, 2026-11-23):**
+
+- **Freeways, freeway connectors and ramps are car only.** Walking and microtransit use only the street, alley and
+  driveway edges (the "local" edges, `link_kind` in `<prefix>_edge_kind.csv`). The car network keeps every edge.
+  Freeway nodes keep their numbers in every layer but get no walk, microtransit or boarding link.
+- **Virtual stops** (microtransit boarding) are drawn from **all street nodes** (Lemon Grove 1,047, Downtown 730):
+  each node with probability share ÷ 100, seed 42, in node order. With one seed, every period and headway gets the
+  same stops, and a smaller share is a subset of a larger one. The old construction also drew from all road nodes.
+- **FRT stops** are joined to their street node (step 6 gives each stop that node's coordinates), at 0 m.
+- **Per period** only the car times change: type 4 = the period's car time (`tt_<P>` of
+  `<prefix>_link_period_tt.csv`) × 1.4, type 7 = the period's car time. Walk, FRT and waiting links are the same in
+  every period.
+- **Grid:** `micro` headways 10/15/20/30/60 × shares 50/75/100, `non_micro` the 5 headways, `micro_only` the 3
+  shares, plus `auto_edges`: 24 files per period, 120 per area.
+- **Settings:** walk speed 1.6 m/s; microtransit time factor 1.4; microtransit waiting time 180 s (a starting
+  value, which MTSM replaces with FleetPy's waiting times).
+
+**Outputs** (`outputs_MGRA15/<area>/super_network/`; MTSM's file names with the period appended, as proposed to
+MTSM):
+
+| File | Content |
+|---|---|
+| `initial_super_network_micro_hw_<h>_virstop_<s>_<P>.csv` | walk + FRT + microtransit (link types 0, 1, 2, 4, 5) |
+| `initial_super_network_non_micro_hw_<h>_<P>.csv` | walk + FRT (0, 1, 2) |
+| `initial_super_network_micro_only_virstop_<s>_<P>.csv` | walk + microtransit (0, 4, 5); node numbers as in `micro` |
+| `auto_edges_<P>.csv` | the car network (7) |
+| `super_network_info.csv` | `setting,value`: `num_walk_nodes`, `microtransit_node_offset` and the other node ranges for MTSM's `mtsm_constant_configurations.csv`, counts and settings |
+| `inputs/local_edges.csv`, `inputs/road_edges_<P>.csv`, `inputs/virtual_stops_<s>.csv` | the builder's inputs: local edges, road edges with the period's car time, virtual stops per share |
+
+All network files have `from_node,to_node,distance,travel_time,link_type,route` (m, s; `route` −1 except FRT).
+
+**Checks** (the script stops on failure): local edges two-way, their nodes = the street nodes; per file no
+duplicate (from, to); walk links = the local edges, microtransit links = the local edges; car network = every edge;
+virtual stops are street nodes, smaller shares inside larger ones; every FRT stop at its node (0 m); walk, FRT and
+waiting links identical in every period.
+
 ---
 
 ## 5. Output layout
@@ -451,9 +518,12 @@ outputs_MGRA15/
                   <prefix>_link_period_tt.csv, _roads_period_tt.shp                         (step 4)
     mapping/      Nodes_MGRA_mapping.csv, MGRA_Nodes_mapping.csv                            (step 3)
     fleetpy_network/  base/, 0/, 10800/, 21600/, 32400/, 55800/, 68400/, network_dynamics.csv (step 4)
+    fleetpy_initial_vehicle_distribution/  imbalanced.csv                                   (step 4)
     demand/       <area>_trips_nodes_study_area_with_beta.csv, _debug_..., _trips_trace.csv,
                   _dropped_trips.csv                                                        (step 5)
     frt/          frt_stops.csv, frt_edges.csv, frt_routes.csv, frt_stops.shp, frt_links.shp (step 6)
+    super_network/  initial_super_network_*_<P>.csv, auto_edges_<P>.csv, super_network_info.csv,
+                  inputs/                                                                   (step 7)
 ```
 
 All coordinates are **EPSG:2230** (NAD83 / California zone 6, US ft). Node IDs in every FleetPy-facing file are
@@ -467,6 +537,8 @@ Also in the local `outputs_MGRA15/`, but not written by the scripts:
 - `<area>/backup_streets_only/`: `network/`, `mapping/`, `demand/` and `fleetpy_network/` as they were before
   freeways were added (2026-11-20). `build_bikenet_networks.py --no-freeways` and steps 3–5 reproduce the CSVs
   byte for byte (the `.dbf` header date differs; the period shapefile now also has `LINK_KIND`).
+- `<area>/backup_fleetpy_with_freeways/`: `fleetpy_network/` with the freeway edges, and the step-4 period files,
+  as they were before 2026-11-23. `build_period_travel_times.py --fleetpy-freeways` reproduces them.
 - `<area>/network/<prefix>_TNED_streets.gpkg`: QGIS comparison layers. They hold the TNED links touching the area,
   without connectors, freeways and ramps, with `in_ours` (share of length within 30 ft of our network) and `covered`
   (`in_ours` ≥ 0.8).
@@ -478,6 +550,7 @@ Bike_Net-style link files keep feet and mph.
 
 | File | Column | Unit |
 |---|---|---|
+| `super_network/*.csv` (network files) | `distance` / `travel_time` | meters / seconds |
 | `network/edges.csv`, `fleetpy_network/base/edges.csv` | `distance` | meters (= `LENGTH` ft ÷ 3.28084) |
 | | `travel_time` (free flow) | seconds (= distance ÷ max(SPEED, 10 mph)) |
 | `fleetpy_network/<t>/edges_td_att.csv` | `edge_tt` (period time) | seconds |
@@ -524,6 +597,11 @@ and `SPD` in mph, and `final_trips.csv` `depart` is a half-hour period (1–48).
 | FRT TNED stop nodes (on boundary, ≤ 50 ft out) / street nodes joined | 45 (7) / 45 | 112 (9) / 109 |
 | FRT link length (sum of directed links) | 28.46 mi | 58.07 mi |
 | FRT join distance median / p90 / max | 0 / 146 / 303 ft | 0 / 127 / 635 ft |
+| super-network: `num_walk_nodes` / `microtransit_node_offset` | 1,067 / 1,189 | 800 / 1,154 |
+| road edges: local (walk, microtransit) / car only | 2,574 / 27 | 2,154 / 101 |
+| virtual stops at 50 / 75 / 100 % (seed 42) | 507 / 781 / 1,047 | 362 / 548 / 730 |
+| request ends at a virtual stop, 50 / 75 / 100 % | 51.7 / 75.1 / 100 % | 46.2 / 71.5 / 100 % |
+| links per type, `micro_hw_10_virstop_75` (0 / 1 / 2 / 4 / 5) | 2,574 / 110 / 244 / 2,574 / 1,562 | 2,154 / 326 / 708 / 2,154 / 1,096 |
 
 With the same inputs and seed, a rebuild reproduces these numbers and files exactly.
 
@@ -544,18 +622,24 @@ With the same inputs and seed, a rebuild reproduces these numbers and files exac
   first period folder crashes.
 - **MTSM's runner:** `fleetpy_runner.stage_inputs` copies only the `base/` files (`LG_STAGED_INPUTS`). Add the
   period folders and `network_dynamics.csv` to that list.
-- **Freeways in MTSM's super-network:** `pre_process/build_super_network.py` (MTSM b38d7ba) puts a walk link on
-  every road edge, draws virtual stops from all road nodes, joins FRT stops to the nearest road node, and assumes
-  two edges per road segment. With freeways in the network, use `<prefix>_edge_kind.csv` and `_node_kind.csv` to
-  keep walking, virtual stops and stop joining on streets. Car (`auto_edges.csv`) and microtransit driving can use
-  every edge.
-- **FRT in MTSM's super-network:** pass `network/nodes.csv`, `network/edges.csv`, `frt/frt_stops.csv` and
-  `frt/frt_edges.csv` to `build_super_network.py` (`--road-nodes --road-edges --frt-stops --frt-edges`). A test run
-  (`--variant non_micro --headway 10`) reads both areas; every stop lands on its street node at 0 ft.
+- **Initial vehicle positions:** copy `fleetpy_initial_vehicle_distribution/imbalanced.csv` to FleetPy's
+  `data/fleetctrl/initial_vehicle_distribution/<network name>/` (MTSM: `fleetpy_runner.LG_STAGED_INPUTS`) and keep
+  `op_init_veh_distribution,imbalanced.csv`. Without such a file FleetPy spreads the vehicles uniformly over **all**
+  nodes, including the freeway nodes, which have no edge in `fleetpy_network/`; a vehicle placed there never moves.
+  MTSM's current `imbalanced.csv` (nodes 256, 400, 600, 650, 700) is FleetPy's example file and names nodes of the
+  old Lemon Grove network.
+- **MTSM super-networks:** step 7 writes them, one set per period, with walking and microtransit off the freeways.
+  MTSM still loads one network for every period (one `auto_edges.csv`, initial networks keyed by variant, headway
+  and share only) and has 4 periods (AM to 10:00, MD to 15:00, PM to 20:00, EV) instead of ABM3's 5. Using the
+  period networks needs MTSM changes (an MTSM open item, written 2026-11-23). The `--local-edges` option of
+  `build_super_network.py` settles MTSM I-33 once the builder is copied back into MTSM.
+  - Set `num_walk_nodes` and `microtransit_node_offset` in MTSM's constant configuration from
+    `super_network_info.csv`.
   - `route` is the route number for both directions; MTSM's line cost counts a route as a line run both ways.
   - MTSM (008c6ac) charges the FRT fare and computes line length, cost and ridership output only for Lemon Grove;
-    a Downtown run fails. MTSM tracks this as I-34.
-  - Until MTSM I-33 is done, its builder still puts walk links on freeway edges (see the next point).
+    a Downtown run fails. It updates the microtransit waiting links (whole-region branch) only for Lemon Grove,
+    reading `pre_nodes.csv` from the Lemon Grove folder; our `pre_nodes.csv` already has `census_tract` = 0 for
+    every node, which is all the whole-region branch needs. MTSM tracks this as I-34.
 - **Demand file in MTSM:**
   - MTSM reads the demand file with `read_request`, which picks columns by name and ignores the extra ones.
   - It then writes FleetPy's own request file with only `rq_time, start, end, request_id`.
@@ -669,6 +753,7 @@ build_fleetpy_network_mapping.py   step 3
 build_period_travel_times.py       step 4
 build_abm3_demand_files.py         step 5
 build_frt_network.py               step 6
+build_period_super_networks.py     step 7
 process_network.py                 network helpers used by step 3 (create_network_from_raw_edges,
                                    write_node_edge_from_pre_node_edge; IS_DEMAND and ONEWAY columns are
                                    optional); other functions there are legacy and contain hard-coded local paths
@@ -676,10 +761,12 @@ generate_demand_files.py           legacy MGRA13/ABM2-era demand pipeline (selec
                                    map_mgra_to_nodes, TRPartA_demand_files, synthesize_requests_with_trend_time,
                                    ...). Not used by the steps above; kept for reference and older studies
 rebuild_mgra_road_overlays.py      legacy: rebuilds the MGRA13 QGIS overlay CSVs used by generate_demand_files.py
-build_super_network.py             copy of MTSM's pre_process/build_super_network.py (MTSM 008c6ac, unchanged):
-                                   builds an MTSM super-network (walk, FRT, microtransit) from a road network and
-                                   an FRT stop/edge network (step 6). Test-run only; it does not keep walking,
-                                   virtual stops or FRT stops off the freeways (MTSM I-33)
+build_super_network.py             MTSM's pre_process/build_super_network.py (from MTSM 008c6ac) with one addition,
+                                   --local-edges (2026-11-23, MTSM I-33): the road edges walkers and microtransit
+                                   may use; the others (freeways, ramps) are car only. Without the option it writes
+                                   the same files as MTSM's version (checked byte for byte). Builds one
+                                   super-network (walk, FRT, microtransit) and the car network; used by step 7.
+                                   To be copied back into MTSM
 CLAUDE.md                          detailed working notes: every decision, check and count behind the pipeline
 ```
 
