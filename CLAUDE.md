@@ -13,6 +13,7 @@ build_bikenet_networks.py              MGRA15-era LG/DT road networks from Bike_
 build_fleetpy_network_mapping.py       FleetPy nodes/edges + zone -> pickup node mapping from those networks
 build_period_travel_times.py           5-period link times from the ABM3 assignment (TNED hwyload) + FleetPy network folder
 build_abm3_demand_files.py             ABM3 demand files (trip requests with betas) on the MGRA15 networks
+build_abm3_demand_samples.py           nested 10% / 25% samples of those demand files (2026-11-27); see "Demand build"
 build_frt_network.py                   MTSM FRT inputs (frt_stops/frt_edges/frt_routes) from the gdb transit tables; see "FRT network"
 build_super_network.py                 MTSM pre_process/build_super_network.py (008c6ac) + --local-edges (2026-11-23; car-only freeways); to copy back to MTSM
 build_period_super_networks.py         MTSM super-networks per ABM3 period (full grid) + car networks; see "Super-networks"
@@ -44,6 +45,7 @@ $E/python.exe build_bikenet_networks.py            # then:
 $E/python.exe build_fleetpy_network_mapping.py     # then:
 $E/python.exe build_period_travel_times.py         # then:
 $E/python.exe build_abm3_demand_files.py           # all four refuse to overwrite without --overwrite
+$E/python.exe build_abm3_demand_samples.py         # after step 5; also needs --overwrite
 $E/python.exe build_frt_network.py                 # after build_fleetpy_network_mapping.py; also needs --overwrite
 $E/python.exe build_period_super_networks.py       # after steps 4 and 6; also needs --overwrite
 ```
@@ -450,6 +452,7 @@ Bike_Net has no freeways or ramps. The user wants them in the network, taken fro
 
   `bt_t_fr` is the same draw.
 - Not yet tested in FleetPy (text columns `purpose`, `trip_mode`). **Wait for the user's go-ahead.**
+- **10% and 25% samples (user, 2026-11-27; `build_abm3_demand_samples.py`, about 15 s).** A separate script reads only the full and debug files (nothing upstream rerun). Same method as the debug sample: exact size round(n × fraction), `rng.choice(replace=False)`, own `np.random.default_rng(42)` per area. **Nested** (Claude's call, the user left it open): debug ⊂ 10% ⊂ 25%, the 10% starting from the existing debug rows; the debug file is not changed. Rows copied byte for byte from the full file (full file's `request_id`s, `rq_time` order). No scaling. Files `<area>_10pct_` / `<area>_25pct_trips_nodes_study_area_with_beta.csv`; the user renames one to the standard name to use it. Rows LG 4,270 / 10,674 (10,674.5 rounds half to even), DT 18,475 / 46,188. Rerun byte-identical; the step-5 files unchanged (md5). Period/mode shares, mean `bt_c_gas` and income within about 1 point / 1.5% of the full file.
 
 ### ABM3 trip check (2026-11-19, read-only pass over final_trips, about 2 min)
 

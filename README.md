@@ -38,6 +38,8 @@ run the pipeline, put your own copies of the raw files in the folders listed bel
  final_trips.csv, final_households.csv, final_persons.csv, mgra15.shp
                       ▼
  [5] build_abm3_demand_files.py      → demand/<area>_trips_nodes_study_area_with_beta.csv (+ debug, trace, dropped)
+                      ▼
+ [5b] build_abm3_demand_samples.py   → demand/<area>_10pct_..., <area>_25pct_... (nested samples of the full file)
 
  EMMEOutputs.gdb (trrt, TransitRoute, trstop, TNED_HwyNodes, TNED_RailNodes) + network/ from step 3
                       ▼
@@ -414,6 +416,32 @@ MTSM reads it as the free-flow time.
 **Checks** (the script stops on failure): no request has start = end; every node belongs to its trip's zone
 mapping; no NaN; `rq_time` is sorted; `transit_pass` is 0/1.
 
+#### Step 5b: 10% and 25% samples (`build_abm3_demand_samples.py`, added 2026-11-27, about 15 s)
+
+Reads only the step-5 full and debug files; nothing upstream is rerun or rewritten.
+
+- **Method**, as for the debug sample: exact size round(n × fraction), drawn without replacement with
+  `rng.choice` from its own `np.random.default_rng(42)` per area.
+- **Nested:** debug (1%) ⊂ 10% ⊂ 25%. The 10% sample is the existing debug rows plus random other rows; the 25%
+  sample is the 10% rows plus random other rows. The debug file is read, never changed.
+- Rows are copied **byte for byte** from the full file: same columns, values, `request_id`s (not renumbered) and
+  `rq_time` order. The trace file serves every sample.
+- **No scaling:** a 25% sample is a quarter of the demand.
+- FleetPy and MTSM load `<area>_trips_nodes_study_area_with_beta.csv`, so **rename a sample** to that name (or name
+  it in the config) when you use it.
+- Options: `--areas`, `--fractions` (default `0.1 0.25`), `--seed`, `--out-root`, `--overwrite` (refuses to
+  overwrite otherwise).
+- Checks (stops on failure): full-file `request_id` = 0..N−1 in row order; debug rows equal their full-file rows;
+  sizes exact; samples nested; every sample line equals its full-file line; `rq_time` sorted.
+
+| File | LG rows | DT rows |
+|---|---|---|
+| `<area>_10pct_trips_nodes_study_area_with_beta.csv` | 4,270 | 18,475 |
+| `<area>_25pct_trips_nodes_study_area_with_beta.csv` | 10,674 | 46,188 |
+
+(LG 25%: 42,698 × 0.25 = 10,674.5, rounded half to even.) Period and mode shares, mean `bt_c_gas` and mean income
+of the samples are within about 1 percentage point / 1.5% of the full file.
+
 ### Step 6: FRT network (`build_frt_network.py`)
 
 Writes the fixed-route transit (FRT) inputs of MTSM's `build_super_network.py` from the ABM3 transit network in
@@ -521,6 +549,7 @@ outputs_MGRA15/
     fleetpy_initial_vehicle_distribution/  imbalanced.csv                                   (step 4)
     demand/       <area>_trips_nodes_study_area_with_beta.csv, _debug_..., _trips_trace.csv,
                   _dropped_trips.csv                                                        (step 5)
+                  <area>_10pct_..., <area>_25pct_trips_nodes_study_area_with_beta.csv       (step 5b)
     frt/          frt_stops.csv, frt_edges.csv, frt_routes.csv, frt_stops.shp, frt_links.shp (step 6)
     super_network/  initial_super_network_*_<P>.csv, auto_edges_<P>.csv, super_network_info.csv,
                   inputs/                                                                   (step 7)
@@ -591,6 +620,7 @@ and `SPD` in mph, and `final_trips.csv` `depart` is a half-hour period (1–48).
 | ABM3 trips with both ends in the area | 43,737 | 208,327 |
 | dropped: income 0 / no distinct node | 512 / 527 | 6,911 / 16,665 |
 | **requests written** / debug | **42,698** / 427 | **184,751** / 1,848 |
+| 10% / 25% samples (2026-11-27, nested) | 4,270 / 10,674 | 18,475 / 46,188 |
 | mean per-worker income | 64,785.7 | 81,410.0 |
 | FRT (2026-11-23): routes | 7: 4, 520, 851, 856, 916, 917, 936 | 21: 2, 3, 4, 5, 7, 11, 12, 20, 83, 120, 215, 225, 235, 510, 520, 530, 901, 923, 929, 992, 994 |
 | FRT variants / stop nodes / links | 12 / 122 / 110 | 41 / 354 / 326 |
@@ -752,6 +782,7 @@ build_bikenet_networks.py          step 2
 build_fleetpy_network_mapping.py   step 3
 build_period_travel_times.py       step 4
 build_abm3_demand_files.py         step 5
+build_abm3_demand_samples.py       step 5b: nested 10% / 25% samples of the step-5 full file
 build_frt_network.py               step 6
 build_period_super_networks.py     step 7
 process_network.py                 network helpers used by step 3 (create_network_from_raw_edges,
